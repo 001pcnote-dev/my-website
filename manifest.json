@@ -7,7 +7,7 @@
   "theme_color": "#6366f1",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3203/3203875.png",
+      "src": "https://raw.githubusercontent.com/001pcnote-dev/my-website/refs/heads/main/smartdiary.png",
       "sizes": "192x192",
       "type": "image/png"
     }
