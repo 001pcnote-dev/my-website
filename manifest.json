@@ -8,7 +8,7 @@
   "icons": [
     {
       "src": "https://raw.githubusercontent.com/001pcnote-dev/my-website/refs/heads/main/smartdiary.png",
-      "sizes": "192x192",
+      "sizes": "512x512",
       "type": "image/png"
     }
   ]
