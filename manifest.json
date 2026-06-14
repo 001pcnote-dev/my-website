@@ -1,18 +1,19 @@
 {
   "name": "SmartDiary",
   "short_name": "SmartDiary",
-  "start_url": "./",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f8fafc",
   "theme_color": "#6366f1",
   "icons": [
     {
-      "src": "assets/smartdiary192.png",
+      "src": "smartdiary192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
-      "src": "assets/smartdiary512.jpg",
+      "src": "smartdiary512.jpg",
       "sizes": "512x512",
       "type": "image/jpeg"
     }

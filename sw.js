@@ -1,12 +1,12 @@
-const CACHE_NAME = 'smartdiary-cache-v1';
+const CACHE_NAME = 'smartdiary-cache-v2'; // キャッシュを更新するためにバージョンをv2にアップ
 
 // 完全にオフラインで動作させるために事前にキャッシュ（プレキャッシュ）するリソース
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
   './manifest.json',
-  './assets/smartdiary192.png',
-  './assets/smartdiary512.jpg',
+  './smartdiary192.png',
+  './smartdiary512.jpg',
   // index.htmlで使用されている外部CDNリソース
   'https://cdn.tailwindcss.com?plugins=typography',
   'https://cdn.jsdelivr.net/npm/marked/marked.min.js',
@@ -28,14 +28,14 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// アクティベートイベント：古いバージョンのキャッシュを削除
+// アクティベートイベント：古いキャッシュの削除
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cache) => {
           if (cache !== CACHE_NAME) {
-            console.log('[Service Worker] Clearing old cache:', cache);
+            console.log('[Service Worker] Deleting old cache:', cache);
             return caches.delete(cache);
           }
         })
@@ -81,8 +81,6 @@ self.addEventListener('fetch', (event) => {
         });
 
         return networkResponse;
-      }).catch((error) => {
-        console.error('[Service Worker] Fetch failed:', error);
       });
     })
   );
