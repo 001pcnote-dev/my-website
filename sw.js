@@ -1,34 +1,37 @@
-const CACHE_NAME = 'smartdiary-cache-v2'; // キャッシュを更新するためにバージョンをv2にアップ
+const CACHE_NAME = 'smartdiary-cache-v3';
 
-// 完全にオフラインで動作させるために事前にキャッシュ（プレキャッシュ）するリソース
+// プレキャッシュするリソース（すべて相対パス・外部CDN）
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
   './manifest.json',
   './smartdiary192.png',
   './smartdiary512.jpg',
-  // index.htmlで使用されている外部CDNリソース
   'https://cdn.tailwindcss.com?plugins=typography',
   'https://cdn.jsdelivr.net/npm/marked/marked.min.js',
   'https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js',
   'https://cdn.jsdelivr.net/npm/exif-js',
-  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
-  'https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap'
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'
 ];
 
-// インストールイベント：必要なリソースをまとめてキャッシュに保存
+// インストールイベント
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('[Service Worker] Pre-caching offline assets');
-        return cache.addAll(ASSETS_TO_CACHE);
+        console.log('[Service Worker] Pre-caching assets');
+        // 1つずつキャッシュして、失敗したURLがあってもスキップできるように個別に登録
+        return Promise.allSettled(
+          ASSETS_TO_CACHE.map(url => 
+            cache.add(url).catch(err => console.error(`Failed to cache: ${url}`, err))
+          )
+        );
       })
-      .then(() => self.skipWaiting()) // 新しいサービスワーカーをすぐに有効化
+      .then(() => self.skipWaiting())
   );
 });
 
-// アクティベートイベント：古いキャッシュの削除
+// アクティベートイベント（古いキャッシュの削除）
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
@@ -40,47 +43,58 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    }).then(() => self.clients.claim()) // アクティブ化後すぐに制御を開始
+    }).then(() => self.clients.claim())
   );
 });
 
-// フェッチイベント：ネットワークリクエスト発生時の処理
-// (Stale-While-Revalidate 戦略：キャッシュから即座に返しつつ、裏で最新版に更新)
+// フェッチイベント（ネットワークリクエストの制御）
 self.addEventListener('fetch', (event) => {
-  // ブラウザ拡張機能などの http/https 以外のプロトコル（chrome-extension等）は除外
   if (!event.request.url.startsWith('http')) return;
 
+  // ナビゲーションリクエスト（＝ユーザーがアプリを起動した時やページを読み込んだ時）の最適化
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      caches.match('./index.html').then((perfectHit) => {
+        // ナビゲーション時は、最悪でも必ずキャッシュされた index.html を返す
+        return perfectHit || fetch(event.request).catch(() => caches.match('./'));
+      })
+    );
+    return;
+  }
+
+  // 通常のリソース（画像やスクリプト）のリクエスト処理
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
+    caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
       if (cachedResponse) {
-        // 1. キャッシュがあれば即座にそれを返す
-        // 2. 同時に裏でネットワークから最新データを取得し、キャッシュを静かに更新する
+        // キャッシュがあれば即座に返し、裏で最新版をネットワーク取得して更新（Stale-While-Revalidate）
         fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(event.request, networkResponse);
             });
           }
-        }).catch(() => {
-          // オフライン時はネットワークエラーになりますが、すでにキャッシュを返しているので無視してOK
-        });
+        }).catch(() => { /* オフライン時は何もしない */ });
 
         return cachedResponse;
       }
 
-      // キャッシュにないリクエスト（FontAwesomeのフォントファイルwoff2など、動的に読み込まれるもの）
+      // キャッシュになければネットワークから取得
       return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type === 'error') {
+        if (!networkResponse || networkResponse.status !== 200) {
           return networkResponse;
         }
-
-        // 取得した新しいリソースを複製してキャッシュに保存
+        // 動的に取得できたリソースはキャッシュに追加
         const responseToCache = networkResponse.clone();
         caches.open(CACHE_NAME).then((cache) => {
           cache.put(event.request, responseToCache);
         });
-
         return networkResponse;
+      }).catch((err) => {
+        // Google Fontsなどの特殊なリクエストでオフライン時のフォールバック
+        if (event.request.url.includes('fonts.googleapis.com') || event.request.url.includes('fonts.gstatic.com')) {
+          return caches.match(event.request, { ignoreSearch: true });
+        }
+        throw err;
       });
     })
   );
