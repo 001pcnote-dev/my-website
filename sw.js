@@ -1,4 +1,4 @@
-const CACHE_NAME = 'smartdiary-cache-v2';
+const CACHE_NAME = 'smartdiary-cache-v1';
 const urlsToCache = [
   './',
   './manifest.json',
