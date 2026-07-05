@@ -439,10 +439,11 @@ async function reconnectPreviousFolder() {
     const storedHandle = await appDB.get('system_state', 'dirHandle');
     if (storedHandle) {
         try {
+            // ボタンを押したら、ブラウザの許可画面が出る前にすぐモーダルを閉じる
+            closeStartupSyncModal();
+
             // ブラウザの許可プロンプトを呼び出す
             if ((await storedHandle.requestPermission({ mode: 'readwrite' })) === 'granted') {
-                // ▼ 修正: 処理の前にモーダルを閉じてユーザーを待たせないようにする
-                closeStartupSyncModal();
                 showToast("前回のフォルダに再接続中...");
                 
                 await setupFolder(storedHandle);
@@ -469,10 +470,12 @@ async function handleStartupSync() {
         if (!window.showDirectoryPicker) {
             throw new Error("File System Access API is not supported on this browser.");
         }
+        
+        // フォルダ選択画面が出る前にすぐモーダルを閉じる
+        closeStartupSyncModal();
+
         const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
         
-        // ▼ 修正: 処理の前にモーダルを閉じてユーザーを待たせないようにする
-        closeStartupSyncModal();
         showToast("フォルダの同期を開始します...");
         
         await appDB.set('system_state', 'dirHandle', handle);
