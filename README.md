@@ -1,2 +1,3 @@
 # my-website
-## smartdiary20260630
+## smartdiary20260705
+## モジュール化済み
