@@ -66,6 +66,8 @@ let isAlbumHeaderVisible = false;
 
 let lastScrollY = window.scrollY;
 let saveTimeout = null;
+let headerHideTimeout = null;
+let filterHideTimeout = null;
 let longPressTimer;
 let isLongPress = false;
 let viewMenuLongPressTimer;
@@ -106,12 +108,20 @@ const weatherConfig = {
 const mediaUrlCache = new Map();
 
 function base64ToBlob(base64, type) {
-    const bin = atob(base64.split(',')[1]);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) {
-        arr[i] = bin.charCodeAt(i);
+    const base64Data = base64.includes(',') ? base64.split(',')[1] : base64;
+    const bin = atob(base64Data);
+    const chunkSize = 1024 * 10; // データを10KBずつ小分けにして処理
+    const byteArrays = [];
+
+    for (let offset = 0; offset < bin.length; offset += chunkSize) {
+        const chunk = bin.slice(offset, offset + chunkSize);
+        const bytes = new Uint8Array(chunk.length);
+        for (let i = 0; i < chunk.length; i++) {
+            bytes[i] = chunk.charCodeAt(i);
+        }
+        byteArrays.push(bytes);
     }
-    return new Blob([arr], { type: type });
+    return new Blob(byteArrays, { type: type });
 }
 
 async function loadMediaUrl(mediaName) {
@@ -160,8 +170,10 @@ function showCalendarPopup(items, cellElement) {
     items.forEach(item => {
         const d = getSafeDate(item.date);
         const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        let rawText = item.content ? item.content.replace(/<[^>]*>?/gm, '') : '内容なし';
-        let text = rawText.substring(0, 40) + (rawText.length > 40 ? '...' : '');
+        
+        // 記号が崩れないよう、先に安全化処理をしてから文字を切り取る
+        let safeContent = item.content ? DOMPurify.sanitize(item.content, { ALLOWED_TAGS: [] }) : '内容なし';
+        let text = safeContent.substring(0, 40) + (safeContent.length > 40 ? '...' : '');
 
         let weatherIcon = item.weather && weatherConfig[item.weather] ? `<i class="fa-solid ${weatherConfig[item.weather].icon} ${weatherConfig[item.weather].color} ml-1"></i>` : '';
         const mFiles = item.mediaFiles || (item.media ? [item.media] : []);
@@ -179,7 +191,7 @@ function showCalendarPopup(items, cellElement) {
                 <div class="text-[11px] text-slate-300 dark:text-slate-500 font-bold mb-1 flex items-center">
                     <i class="fa-regular fa-clock mr-1"></i>${time} ${weatherIcon} ${mediaIcon}
                 </div>
-                <div class="text-[11px] leading-relaxed font-medium break-words whitespace-pre-wrap line-clamp-3">${DOMPurify.sanitize(text)}</div>
+                <div class="text-[11px] leading-relaxed font-medium break-words whitespace-pre-wrap line-clamp-3">${text}</div>
             </div>
         `;
     });
@@ -191,26 +203,33 @@ function showCalendarPopup(items, cellElement) {
 
     const popupWidth = popup.offsetWidth;
     const screenWidth = window.innerWidth;
-    const margin = 12;
+        const margin = 12;
 
-    let popupLeft = cellCenterX;
+        let popupLeft = cellCenterX;
 
-    if (popupLeft - popupWidth / 2 < margin) {
-        popupLeft = popupWidth / 2 + margin;
-    } else if (popupLeft + popupWidth / 2 > screenWidth - margin) {
-        popupLeft = screenWidth - popupWidth / 2 - margin;
-    }
+        // はみ出しを防ぐため、一番左・一番右の限界値を設定
+        const minLeft = popupWidth / 2 + margin;
+        const maxLeft = screenWidth - popupWidth / 2 - margin;
 
-    popup.style.left = popupLeft + 'px';
-    popup.style.top = (rect.top - 10) + 'px';
+        if (popupLeft < minLeft) {
+            popupLeft = minLeft;
+        } else if (popupLeft > maxLeft) {
+            popupLeft = maxLeft;
+        }
 
-    const arrow = popup.lastElementChild;
-    if (arrow) {
-        const offset = cellCenterX - popupLeft;
-        arrow.style.left = `calc(50% + ${offset}px)`;
-    }
+        popup.style.left = popupLeft + 'px';
+        popup.style.top = (rect.top - 10) + 'px';
 
-    setTimeout(() => popup.classList.remove('opacity-0'), 10);
+        const arrow = popup.lastElementChild;
+        if (arrow) {
+            const offset = cellCenterX - popupLeft;
+            // 矢印が吹き出しの枠外（角の部分）に飛び出さないよう、動ける範囲を制限
+            const maxOffset = (popupWidth / 2) - 16;
+            const safeOffset = Math.max(-maxOffset, Math.min(offset, maxOffset));
+            arrow.style.left = `calc(50% + ${safeOffset}px)`;
+        }
+
+        setTimeout(() => popup.classList.remove('opacity-0'), 10);
 }
 
 function hideCalendarPopup() {
@@ -300,6 +319,9 @@ function getAllImagesFromItem(item) {
 // 4. File System Access API & フォルダ同期
 // ==========================================
 document.addEventListener('DOMContentLoaded', async () => {
+    // 初期表示時のテーマ切り替えによる画面のチラつき（白点滅）を防ぐため、アニメーションを一時無効化
+    document.body.classList.remove('transition-colors', 'duration-300');
+
     await appDB.init();
 
     // 初期のキャッシュ設定を読み込み
@@ -346,7 +368,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupViewMenuLongPress();
 
     await checkAndShowStartupSync();
+
+    // 全ての初期化が完了した後、安全にアニメーションを再有効化
+    setTimeout(() => {
+        document.body.classList.add('transition-colors', 'duration-300');
+    }, 50);
 });
+
 // 共通のフォルダセットアップ処理
 async function setupFolder(handle) {
     dirHandle = handle;
@@ -433,12 +461,16 @@ function showSyncModal(modal) {
     animateModal(modal, true);
 }
 
-// フォルダを選択し直さずに1クリックで再接続する処理
+let isFolderSyncing = false; // 処理の重複実行を防ぐための目印（ロック）
+
 // フォルダを選択し直さずに1クリックで再接続する処理
 async function reconnectPreviousFolder() {
-    const storedHandle = await appDB.get('system_state', 'dirHandle');
-    if (storedHandle) {
-        try {
+    if (isFolderSyncing) return; // 既に処理中なら何もしない
+    isFolderSyncing = true;
+    
+    try {
+        const storedHandle = await appDB.get('system_state', 'dirHandle');
+        if (storedHandle) {
             // ボタンを押したら、ブラウザの許可画面が出る前にすぐモーダルを閉じる
             closeStartupSyncModal();
 
@@ -455,17 +487,22 @@ async function reconnectPreviousFolder() {
                 showToast("再接続がキャンセルされました");
                 return; 
             }
-        } catch (err) {
-            console.error("再接続エラー:", err);
-            showToast("再接続に失敗しました");
-            return;
         }
+        // 保存情報がない場合のみフォールバック
+        await handleStartupSync();
+    } catch (err) {
+        console.error("再接続エラー:", err);
+        showToast("再接続に失敗しました");
+        return;
+    } finally {
+        isFolderSyncing = false; // 処理が完了、またはエラーになったら確実にロックを解除
     }
-    // 保存情報がない場合のみフォールバック
-    handleStartupSync();
 }
 
 async function handleStartupSync() {
+    if (isFolderSyncing) return; // 既に処理中なら何もしない
+    isFolderSyncing = true;
+    
     try {
         if (!window.showDirectoryPicker) {
             throw new Error("File System Access API is not supported on this browser.");
@@ -484,7 +521,13 @@ async function handleStartupSync() {
         showToast("フォルダの同期が完了しました");
     } catch (err) {
         console.error("handleStartupSync error:", err);
-        if (err.name !== 'AbortError') alert("フォルダの同期に失敗しました（未対応ブラウザの可能性があります）。");
+        if (err.name !== 'AbortError') {
+            showToast("フォルダの同期に失敗しました");
+        } else {
+            showToast("フォルダの選択がキャンセルされました");
+        }
+    } finally {
+        isFolderSyncing = false; // 処理が完了、またはエラーになったら確実にロックを解除
     }
 }
 
@@ -524,67 +567,78 @@ async function handleEntryContentInput(textarea) {
         }
     }
 }
-
 window.addEventListener('scroll', () => {
     const currentScrollY = window.scrollY;
     const header = document.getElementById('main-header');
     const filterArea = document.getElementById('search-filter-area');
     
     if (viewMode === 'album') {
-        if (isAlbumHeaderVisible && Math.abs(currentScrollY - lastScrollY) > 5) {
-            isAlbumHeaderVisible = false;
-            if (header) {
-                header.classList.add('header-hidden');
-                setTimeout(() => header.classList.add('hidden'), 300);
-            }
-            if (filterArea) {
-                filterArea.classList.add('filter-hidden');
-                setTimeout(() => filterArea.classList.add('hidden'), 300);
-            }
-            document.body.classList.remove('pt-14');
-            const albumToggleBtn = document.getElementById('album-header-toggle-btn');
+            if (isAlbumHeaderVisible && Math.abs(currentScrollY - lastScrollY) > 5) {
+                isAlbumHeaderVisible = false;
+                if (header) {
+                    header.classList.add('header-hidden');
+                    clearTimeout(headerHideTimeout);
+                    headerHideTimeout = setTimeout(() => header?.classList.add('hidden'), 300);
+                }
+                if (filterArea) {
+                    filterArea.classList.add('filter-hidden');
+                    clearTimeout(filterHideTimeout);
+                    filterHideTimeout = setTimeout(() => filterArea?.classList.add('hidden'), 300);
+                }
+                document.body.classList.remove('pt-14');
+                const albumToggleBtn = document.getElementById('album-header-toggle-btn');
             if (albumToggleBtn) albumToggleBtn.innerHTML = '<i class="fa-solid fa-angle-down"></i>';
         }
-        lastScrollY = currentScrollY;
-        return;
-    }
-    
-    if (currentScrollY > 100) {
-        if (currentScrollY > lastScrollY) {
-            header?.classList.add('header-hidden');
-            filterArea?.classList.add('filter-hidden');
-        } else {
-            header?.classList.remove('header-hidden');
-            filterArea?.classList.remove('filter-hidden');
-        }
     } else {
-        header?.classList.remove('header-hidden');
-        filterArea?.classList.remove('filter-hidden');
+        if (currentScrollY > 100) {
+            if (currentScrollY > lastScrollY) {
+                header?.classList.add('header-hidden');
+                filterArea?.classList.add('filter-hidden');
+            } else {
+                clearTimeout(headerHideTimeout);
+                clearTimeout(filterHideTimeout);
+                header?.classList.remove('header-hidden', 'hidden');
+                filterArea?.classList.remove('filter-hidden', 'hidden');
+            }
+        } else {
+            clearTimeout(headerHideTimeout);
+            clearTimeout(filterHideTimeout);
+            header?.classList.remove('header-hidden', 'hidden');
+            filterArea?.classList.remove('filter-hidden', 'hidden');
+        }
     }
-    lastScrollY = currentScrollY;
+        lastScrollY = currentScrollY;
 
-    if (viewMode === 'list' && (window.innerHeight + currentScrollY) >= document.documentElement.scrollHeight - 300) {
+    if ((viewMode === 'list' || viewMode === 'album') && (window.innerHeight + currentScrollY) >= document.documentElement.scrollHeight - 300) {
         if (currentDisplayLimit < currentFilteredItems.length) {
             const prevLimit = currentDisplayLimit;
             currentDisplayLimit += 30;
-            const container = document.getElementById('diary-container'); 
-            const isSearching = checkIsSearching();
-            currentFilteredItems.slice(prevLimit, currentDisplayLimit).forEach(item => {
-                container.appendChild(createCardElement(item, isSearching));
-            });
+            
+            if (viewMode === 'list') {
+                const container = document.getElementById('diary-container'); 
+                const isSearching = checkIsSearching();
+                currentFilteredItems.slice(prevLimit, currentDisplayLimit).forEach(item => {
+                    container.appendChild(createCardElement(item, isSearching));
+                });
+                
+                // 追加した要素が画面に確実に描画されたのを確認してから画像を読み込むように修正
+                requestAnimationFrame(() => {
+                    setTimeout(applyMediaUrls, 10);
+                });
+            } else if (viewMode === 'album') {
+                renderAlbum(); // アルバムの続きを描画
+            }
         }
     }
 });
 
 // ======= UI・表示系関数 =======
 function initTheme() {
-    // IndexedDB(appSettings)からテーマを読み込む
     const savedTheme = appSettings.get('theme');
     if (savedTheme === 'dark') {
         document.documentElement.classList.add('dark');
         document.getElementById('theme-icon').classList.replace('fa-moon', 'fa-sun');
     } else {
-        // デフォルト（light）の場合の明示的なリセット
         document.documentElement.classList.remove('dark');
         document.getElementById('theme-icon').classList.replace('fa-sun', 'fa-moon');
     }
@@ -684,25 +738,23 @@ function toggleAlbumHeader() {
     
     isAlbumHeaderVisible = !isAlbumHeaderVisible;
     if (isAlbumHeaderVisible) {
-        if (header) {
-            header.classList.remove('hidden');
-            setTimeout(() => header.classList.remove('header-hidden'), 10);
-        }
-        if (filterArea) {
-            filterArea.classList.remove('hidden');
-            setTimeout(() => filterArea.classList.remove('filter-hidden'), 10);
-        }
+        header?.classList.remove('hidden');
+        filterArea?.classList.remove('hidden');
+        setTimeout(() => {
+            header?.classList.remove('header-hidden');
+            filterArea?.classList.remove('filter-hidden');
+        }, 10);
+        
         document.body.classList.add('pt-14');
         if (albumToggleBtn) albumToggleBtn.innerHTML = '<i class="fa-solid fa-angle-up"></i>';
     } else {
-        if (header) {
-            header.classList.add('header-hidden');
-            setTimeout(() => header.classList.add('hidden'), 300);
-        }
-        if (filterArea) {
-            filterArea.classList.add('filter-hidden');
-            setTimeout(() => filterArea.classList.add('hidden'), 300);
-        }
+        header?.classList.add('header-hidden');
+        filterArea?.classList.add('filter-hidden');
+        setTimeout(() => {
+            header?.classList.add('hidden');
+            filterArea?.classList.add('hidden');
+        }, 300);
+        
         document.body.classList.remove('pt-14');
         if (albumToggleBtn) albumToggleBtn.innerHTML = '<i class="fa-solid fa-angle-down"></i>';
     }
@@ -729,22 +781,21 @@ function updateEmptyState() {
     }
 }
 
-function handleMainSortChange() {
-    const mainSelect = document.getElementById('main-sort-select');
-    const modalSelect = document.getElementById('modal-sort-select');
-    if (mainSelect && modalSelect) {
-        modalSelect.value = mainSelect.value;
+function syncSortChange(sourceId, targetId) {
+    const source = document.getElementById(sourceId);
+    const target = document.getElementById(targetId);
+    if (source && target) {
+        target.value = source.value;
         filterDiaryItems();
     }
 }
 
+function handleMainSortChange() {
+    syncSortChange('main-sort-select', 'modal-sort-select');
+}
+
 function handleModalSortChange() {
-    const mainSelect = document.getElementById('main-sort-select');
-    const modalSelect = document.getElementById('modal-sort-select');
-    if (mainSelect && modalSelect) {
-        mainSelect.value = modalSelect.value;
-        filterDiaryItems();
-    }
+    syncSortChange('modal-sort-select', 'main-sort-select');
 }
 
 function sortDiaryItemsByDateData() {
@@ -759,7 +810,18 @@ async function saveLocally() {
     try {
         await appDB.set('system_state', 'smart_diary_backup', diaryItems);
         
-        // 【追加】新規作成した diary_items ストアにもデータを個別に保存（同期）する
+        // --- 修正箇所：現在の配列にない古いID（ゴースト）をIndexedDBから確実に消去 ---
+        const validIds = new Set(diaryItems.map(i => i.id));
+        const cachedItems = await appDB.getAll('diary_items');
+        if (cachedItems && cachedItems.length > 0) {
+            for (const cached of cachedItems) {
+                if (!validIds.has(cached.id)) {
+                    await appDB.delete('diary_items', cached.id);
+                }
+            }
+        }
+        // -------------------------------------------------------------------------
+        
         for (const item of diaryItems) {
             await appDB.put('diary_items', item);
         }
@@ -786,7 +848,6 @@ async function saveDiaryToFolder() {
     if (!dirHandle) return;
     return writeQueue.add(async () => {
         try { 
-            // 日記データを年別にグループ分けする
             const yearlyData = {};
             diaryItems.forEach(item => {
                 const year = getSafeDate(item.date).getFullYear() || 'unknown';
@@ -794,7 +855,6 @@ async function saveDiaryToFolder() {
                 yearlyData[year].push(item);
             });
 
-            // 年ごとに「diary_data_2024.json」のような名前で分割保存する
             for (const year of Object.keys(yearlyData)) {
                 const fileName = `diary_data_${year}.json`;
                 const fileHandle = await dirHandle.getFileHandle(fileName, { create: true }); 
@@ -810,32 +870,25 @@ async function saveDiaryToFolder() {
 
 async function saveSettingsToFolder() {
     if (!dirHandle) return;
-    // 設定情報をJsonで一元管理するため、SettingsManagerクラスの保存処理に一本化
     return appSettings.saveSettings();
 }
 
 async function loadDiaryFromLocalDB() { 
     try { 
-        // 【新規】個別の IndexedDB (diary_items) から読み込みを優先
         const items = await appDB.getAll('diary_items');
         if (items && items.length > 0) {
             diaryItems = items;
-            // 修正: new Date() を直接使わず、getSafeDate() を使って安全にソート
             diaryItems.sort((a, b) => getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime());
             renderDiaryItems();
             if (typeof updateTagFilterOptions === 'function') updateTagFilterOptions();
-            return; // 新データがあればここで完了（元の機能を阻害しない）
+            return;
         }
 
-        // 【既存機能の維持】従来の system_state または localStorage からの読み込み（フォールバック）
         const localData = await appDB.get('system_state', 'smart_diary_backup'); 
         if (localData && Array.isArray(localData)) { 
             diaryItems = localData; 
             renderDiaryItems();
             updateTagFilterOptions(); 
-            
-            // 【追加】旧IndexedDBデータが存在する場合も、新しいdiary_itemsへ移行させる
-            // 修正: saveLocally は非同期関数なので await を付与
             await saveLocally();
         } else {
             const oldLocalData = localStorage.getItem('smart_diary_backup');
@@ -845,12 +898,7 @@ async function loadDiaryFromLocalDB() {
                     diaryItems = Array.isArray(parsed) ? parsed : [];
                     renderDiaryItems();
                     updateTagFilterOptions();
-                    
-                    // データをIndexedDBへ保存（移行）
-                    // 修正: 非同期関数の await 漏れを修正
                     await saveLocally();
-                    
-                    // 【追加】localStorageからの移行が完了したら、重複を防ぐため削除する
                     localStorage.removeItem('smart_diary_backup');
                 } catch (e) { console.error(e); }
             } else {
@@ -862,6 +910,7 @@ async function loadDiaryFromLocalDB() {
         updateEmptyState();
     } 
 }
+
 async function initFolderAccess() { 
     try { 
         if (!window.showDirectoryPicker) {
@@ -869,11 +918,9 @@ async function initFolderAccess() {
             return;
         }
         
-        // すでに同期している場合は確認
         if (dirHandle) {
             if (!confirm("現在フォルダに同期中です。別のフォルダに変更しますか？")) return;
         } else {
-            // 未接続で記憶がある場合、再接続を試みる
             const storedHandle = await appDB.get('system_state', 'dirHandle');
             if (storedHandle) {
                 if ((await storedHandle.requestPermission({ mode: 'readwrite' })) === 'granted') {
@@ -900,7 +947,6 @@ async function loadDiaryFromFolder() {
         const settingsText = await (await settingsHandle.getFile()).text();
         const settings = JSON.parse(settingsText);
         
-        // 旧フォーマットと新しいSettingsManager形式のどちらからでもデータを確実に拾う
         const rules = settings.smart_diary_autotag_rules !== undefined ? settings.smart_diary_autotag_rules : (settings.autotagRules || '');
         const syns = settings.smart_diary_synonyms !== undefined ? settings.smart_diary_synonyms : (settings.synonyms || '');
         const incDate = settings.smart_diary_include_date !== undefined ? String(settings.smart_diary_include_date) : (settings.includeDate !== undefined ? String(settings.includeDate) : 'true');
@@ -921,7 +967,6 @@ async function loadDiaryFromFolder() {
             renderFolderList();
         }
         
-        // 画面の入力欄やチェックボックスに最新の値を即座に反映
         const autotagTextarea = document.getElementById('autotag-rules-textarea');
         if (autotagTextarea) autotagTextarea.value = rules;
         
@@ -931,7 +976,6 @@ async function loadDiaryFromFolder() {
         const includeDateCb = document.getElementById('custom-search-include-date');
         if (includeDateCb) includeDateCb.checked = (incDate === 'true');
 
-        // テーマと文字サイズを画面に即座に適用
         if (theme === 'dark') {
             document.documentElement.classList.add('dark');
             document.getElementById('theme-icon').classList.replace('fa-moon', 'fa-sun');
@@ -948,36 +992,43 @@ async function loadDiaryFromFolder() {
     }
 
     try { 
-        let allItems = [];
         let hasOldFormat = false;
+        const filePromises = [];
 
         for await (const entry of dirHandle.values()) {
             if (entry.kind === 'file' && entry.name.startsWith('diary_data') && entry.name.endsWith('.json')) {
-                const fileHandle = await dirHandle.getFileHandle(entry.name);
-                const text = await (await fileHandle.getFile()).text();
-                if (text.trim().length > 0) {
-                    const parsed = JSON.parse(text);
-                    let items = [];
-                    if (!Array.isArray(parsed) && parsed.diaryItems) {
-                        items = parsed.diaryItems;
-                        if (parsed.autotagRules) {
-                            await appSettings.set('smart_diary_autotag_rules', parsed.autotagRules);
+                filePromises.push((async () => {
+                    try {
+                        const file = await entry.getFile();
+                        const text = await file.text();
+                        if (text.trim().length > 0) {
+                            const parsed = JSON.parse(text);
+                            let items = [];
+                            if (!Array.isArray(parsed) && parsed.diaryItems) {
+                                items = parsed.diaryItems;
+                                if (parsed.autotagRules) {
+                                    await appSettings.set('smart_diary_autotag_rules', parsed.autotagRules);
+                                }
+                                hasOldFormat = true;
+                            } else {
+                                items = Array.isArray(parsed) ? parsed : [];
+                            }
+                            
+                            return items.map(item => ({
+                                ...item,
+                                tags: Array.isArray(item.tags) ? item.tags : (item.tags ? item.tags.split(',').map(t => t.trim()).filter(Boolean) : [])
+                            }));
                         }
-                        hasOldFormat = true;
-                    } else {
-                        items = Array.isArray(parsed) ? parsed : [];
+                    } catch (fileErr) {
+                        console.error(`ファイルの読み込みに失敗しました: ${entry.name}`, fileErr);
                     }
-                    
-                    // 【修正ポイント】ここで各アイテムのタグを配列に変換する
-                    const formattedItems = items.map(item => ({
-                        ...item,
-                        tags: Array.isArray(item.tags) ? item.tags : (item.tags ? item.tags.split(',').map(t => t.trim()).filter(Boolean) : [])
-                    }));
-                    
-                    allItems = allItems.concat(formattedItems);
-                }
+                    return [];
+                })());
             }
         }
+
+        const results = await Promise.all(filePromises);
+        let allItems = results.flat();
 
         if (allItems.length > 0) {
             const uniqueItems = new Map();
@@ -1044,7 +1095,6 @@ function renderMediaPreview() {
             <button type="button" onclick="removeSelectedMedia(${index})" class="absolute top-1 right-1 w-6 h-6 bg-red-500/80 hover:bg-red-600 text-white rounded-full flex items-center justify-center backdrop-blur-sm transition-colors opacity-0 group-hover:opacity-100 z-10"><i class="fa-solid fa-xmark text-xs"></i></button>
         `;
         
-        // --- PC用 ドラッグ＆ドロップイベント ---
         el.addEventListener('dragstart', function(e) {
             dragStartIndex = parseInt(this.dataset.index);
             e.dataTransfer.effectAllowed = 'move';
@@ -1084,7 +1134,6 @@ function renderMediaPreview() {
             clearDragHighlight();
         });
 
-        // --- スマホ用 タッチイベント ---
         el.addEventListener('touchstart', function(e) {
             dragStartIndex = parseInt(this.dataset.index);
             setTimeout(() => this.classList.add('opacity-50'), 0);
@@ -1130,9 +1179,56 @@ function renderMediaPreview() {
     setTimeout(applyMediaUrls, 10);
 }
 
-function removeSelectedMedia(index) {
+async function removeSelectedMedia(index) {
+    // --- 修正箇所：単なるプレビュー配列からの削除だけでなく、フォルダ内の実体ファイルも削除する処理を追加 ---
+    const mediaToDelete = currentMediaFiles[index];
+    
+    if (mediaToDelete && dirHandle) {
+        if (!confirm('この画像を削除しますか？\n（元のフォルダからも完全に削除されます）')) return;
+        
+        try {
+            // originalsフォルダからの削除
+            if (mediaToDelete.originalName) {
+                const originalsDir = await dirHandle.getDirectoryHandle('originals', { create: false }).catch(() => null);
+                if (originalsDir) {
+                    await originalsDir.removeEntry(mediaToDelete.originalName).catch(e => console.warn("原本ファイル削除スキップ:", e));
+                }
+            }
+            
+            // mediaフォルダ(サムネイル等)からの削除
+            if (mediaToDelete.mediaName) {
+                const mediaDir = await dirHandle.getDirectoryHandle('media', { create: false }).catch(() => null);
+                if (mediaDir) {
+                    await mediaDir.removeEntry(mediaToDelete.mediaName).catch(e => console.warn("メディアファイル削除スキップ:", e));
+                }
+            }
+            showToast('画像を完全に削除しました');
+        } catch (e) {
+            console.error('画像ファイルの削除に失敗しました:', e);
+            showToast('画像ファイルの削除に失敗しました');
+        }
+    }
+    // -----------------------------------------------------------------------------------
+
     currentMediaFiles.splice(index, 1);
     renderMediaPreview();
+
+    // --- 修正箇所：保存ボタンを押さなくても、日記本体のデータから画像を即座に消去する ---
+    const entryId = document.getElementById('entry-id')?.value;
+    if (entryId) {
+        const itemIndex = diaryItems.findIndex(i => i.id === entryId);
+        if (itemIndex !== -1) {
+            // 日記データの上書きと即時保存
+            diaryItems[itemIndex].mediaFiles = [...currentMediaFiles];
+            saveLocally(); 
+            
+            // 後ろに隠れている日記一覧画面からも、消した画像のサムネイルをすぐに消去する
+            if (typeof renderDiaryItems === 'function') {
+                renderDiaryItems();
+            }
+        }
+    }
+    // -----------------------------------------------------------------------------------
 }
 
 async function handleMediaSelect(event) {
@@ -1152,7 +1248,15 @@ async function handleMediaSelect(event) {
     }
     
     for (const file of files) {
-        const originalName = file.name;
+        // --- 修正箇所：ファイル名を「年月日_ランダム4文字_元の名前」に変更して自動ソート対応 ---
+        const now = new Date();
+        const dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
+        const randomStr = Math.random().toString(36).substring(2, 6);
+        const ext = file.name.includes('.') ? file.name.split('.').pop() : '';
+        const nameWithoutExt = file.name.includes('.') ? file.name.substring(0, file.name.lastIndexOf('.')) : file.name;
+        const originalName = `${dateStr}_${randomStr}_${nameWithoutExt}${ext ? '.' + ext : ''}`;
+        // -------------------------------------------------------------------------
+
         const type = file.type;
         const metadata = await getMediaMetadata(file);
         let newMedia = null;
@@ -1185,7 +1289,7 @@ async function handleMediaSelect(event) {
     event.target.value = ''; 
 }
 
-function compressImage(file, maxSize = 1200) {
+function compressImage(file, maxSize = 2560) {
     return new Promise((resolve) => {
         const img = new Image();
         const url = URL.createObjectURL(file); 
@@ -1210,7 +1314,6 @@ function compressImage(file, maxSize = 1200) {
             const ctx = canvas.getContext('2d'); 
             ctx.drawImage(img, 0, 0, width, height); 
             
-            // PNG形式などは品質指定が効かないため、JPEG等に変換して圧縮率を確保
             const mimeType = file.type === 'image/png' ? 'image/jpeg' : file.type;
             const dataUrl = canvas.toDataURL(mimeType, 0.85);
             
@@ -1350,7 +1453,6 @@ async function saveDiaryItem() {
         const rules = rulesStr.split('\n').filter(r => r.includes(':'));
         rules.forEach(rule => {
             const [tag, keywords] = rule.split(':').map(s => s.trim());
-            // 空文字がキーワードとして判定されるのを防ぐ修正
             const kwArray = keywords.split(',').map(k => k.trim()).filter(k => k !== '');
             if (kwArray.length > 0 && kwArray.some(kw => contentVal.includes(kw))) {
                 addTagAutomatically(tag);
@@ -1374,7 +1476,8 @@ async function saveDiaryItem() {
     } else {
         diaryItems.push(item);
     }
-    diaryItems.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
+    diaryItems.sort((a, b) => getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime());
 
     await saveLocally();
     showToast('保存しました');
@@ -1397,7 +1500,6 @@ async function deleteDiaryItem(id) {
             const mediaFiles = itemToDelete.mediaFiles || (itemToDelete.media ? [itemToDelete.media] : []);
             
             for (const media of mediaFiles) {
-                // 他の日記アイテムで同じファイル名が使用されていないかチェック
                 const isUsedElsewhere = diaryItems.some(i => i.id !== id && (i.mediaFiles || (i.media ? [i.media] : [])).some(m => m.originalName === media.originalName));
                 
                 if (originalsDir && media.originalName && !isUsedElsewhere) {
@@ -1428,6 +1530,7 @@ async function deleteDiaryItem(id) {
     if (typeof renderDiaryItems === 'function') renderDiaryItems();
     if (typeof updateTagFilterOptions === 'function') updateTagFilterOptions();
 }
+
 async function toggleFixed(id) { 
     const item = diaryItems.find(i => i.id === id);
     if (item) {
@@ -1733,7 +1836,6 @@ function setupLongPress() {
         btn.addEventListener('mouseleave', cancelPress);
     });
 }
-
 function setupViewMenuLongPress() {
     const btn = document.getElementById('view-menu-btn'); 
     if (!btn) return;
@@ -1783,7 +1885,7 @@ function createCardElement(item, isSearching) {
             let html = `<div class="${wrapperClasses} relative media-item-container group" data-media-index="${index}">`;
             
             if (!img.isVideo) {
-                html += `<img src="${img.src}" ${img.pendingAttr} alt="Media" class="${imgClasses} cursor-zoom-in transition-transform duration-300" onclick="openLightboxFromCard('${item.id}', ${index})"/>${metaBadge} ${originalBtn}`;
+                html += `<img src="${img.src}" ${img.pendingAttr} alt="Media" class="${imgClasses} cursor-zoom-in transition-transform duration-300" onclick="event.stopPropagation(); openLightboxFromCard('${item.id}', ${index})"/>${metaBadge} ${originalBtn}`;
             } else {
                 const posterAttr = img.src ? `poster="${img.src}"` : (img.pendingAttr ? `poster="" ${img.pendingAttr}` : ''); 
                 const videoId = `video-${item.id}-${index}`;
@@ -2088,6 +2190,7 @@ function filterDiaryItems(resetLimit = true) {
         console.error(e);
     }         
 }
+
 function renderDiaryItems() { 
     currentDisplayLimit = 30;
     filterDiaryItems(false); 
@@ -2123,7 +2226,6 @@ function setPeriodFilter(period) {
     filterDiaryItems(); 
 }
 
-// ======= カレンダー・アルバム機能 =======
 function renderCalendar() {
     try {
         const year = currentCalDate.getFullYear();
@@ -2298,7 +2400,6 @@ function renderCalendarStats(year, month) {
 }
 
 function changeMonth(diff) {
-    // 予期せぬ日付のズレを防ぐため、常に新しいDateインスタンスを生成して代入
     currentCalDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + diff, 1);
     renderCalendar();
 }
@@ -2404,7 +2505,6 @@ function renderAlbum() {
 function scrollGallery(direction) {
     const container = document.getElementById('gallery-scroll-container');
     if (container) {
-        // マジックナンバーを避け、実際の要素の幅に基づいてスクロール量を計算（フォールバック付き）
         const firstItem = container.firstElementChild;
         const scrollAmount = firstItem ? firstItem.offsetWidth + 16 : (window.innerWidth < 640 ? 288 + 16 : 384 + 24);
         container.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
@@ -2421,7 +2521,6 @@ function openImageGallery(itemId, event) {
     if (!galleryModal) {
         galleryModal = document.createElement('div');
         galleryModal.id = 'gallery-expanded-modal';
-        // z-[100] から z-[90] に変更し、拡大画像(z-[100])が必ず手前に表示されるように修正
         galleryModal.className = 'fixed inset-0 bg-black/95 z-[90] hidden opacity-0 transition-opacity duration-300 flex flex-col no-print';
         document.body.appendChild(galleryModal);
     }
@@ -2499,7 +2598,6 @@ function syncImageCheckbox(source) {
     }
 }
 
-// ======= 各種モーダル等 =======
 function openSearchModal() {
     const modal = document.getElementById('search-modal');
     modal.classList.remove('hidden');
@@ -2559,18 +2657,29 @@ function applyAdvancedSearch() {
 
 function clearAdvancedSearch() { 
     try { 
-        document.getElementById('and-input').value = '';
-        document.getElementById('or-input').value = '';
-        document.getElementById('not-input').value = ''; 
-        document.getElementById('search-date-start').value = '';
-        document.getElementById('search-date-end').value = ''; 
-        document.getElementById('search-media-img').checked = false;
-        document.getElementById('search-media-vid').checked = false; 
+        const textInputs = ['and-input', 'or-input', 'not-input', 'search-date-start', 'search-date-end'];
+        textInputs.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+
+        const checkboxes = ['search-media-img', 'search-media-vid'];
+        checkboxes.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.checked = false;
+        });
+        
         document.querySelectorAll('.search-weather-cb').forEach(cb => cb.checked = false);
-        document.getElementById('modal-sort-select').value = 'custom';
-        document.getElementById('main-sort-select').value = 'custom';
+        
+        const sortModal = document.getElementById('modal-sort-select');
+        const sortMain = document.getElementById('main-sort-select');
+        if (sortModal) sortModal.value = 'custom';
+        if (sortMain) sortMain.value = 'custom';
+
         applyAdvancedSearch(); 
-    } catch(e) {} 
+    } catch(e) {
+        console.error("clearAdvancedSearch Error:", e);
+    } 
 }
 
 function clearAllSearchSettings() { 
@@ -2864,7 +2973,7 @@ function closeLightbox() {
 }
 
 function toggleImageZoom(e) {
-    e.stopPropagation();
+    if (e) e.stopPropagation();
     const img = document.getElementById('lightbox-img');
     isOriginalSize = !isOriginalSize;
     
@@ -2955,14 +3064,12 @@ function toggleSettings() {
     }
 }
 
-// ======= エクスポート関連 =======
 function getTargetsForExport() { 
     const targets = []; 
     const hasDiaryCheck = globalSelectedIds.size > 0;
     const hasImageCheck = globalSelectedImageIds.size > 0;
 
     if (!hasDiaryCheck && !hasImageCheck) {
-        // メモリ不足を防ぐため、そのままのデータを引き継ぐ
         return currentFilteredItems;
     }
 
@@ -2978,10 +3085,8 @@ function getTargetsForExport() {
         });
 
         if (isDiaryChecked || checkedImageIndices.length > 0) {
-            // 処理が止まる原因だった重いデータコピー処理を、軽量な方式に変更
             let exportItem = { ...item };
             
-            // 画像が個別に選択されている場合は、選択された画像のみに絞る
             if (checkedImageIndices.length > 0) {
                 exportItem.mediaFiles = mFiles.filter((_, idx) => checkedImageIndices.includes(idx));
             }
@@ -2997,30 +3102,25 @@ function exportData(type) {
     const dateStr = new Date().toISOString().split('T')[0];
     
     const content = type === 'json' ? JSON.stringify(targets, null, 2) : targets.map(i => {
-    // 日付の整形（Tをスペースに置換）
     const displayDate = i.date ? i.date.replace('T', ' ') : (i.date || '');
     let md = `## ${displayDate}\n\n`;
     
-    // 天気の出力（大文字小文字の揺れや未知のデータにも対応するよう改善）
     const weatherVal = i.weather ? String(i.weather).toLowerCase().trim() : '';
     if (weatherVal && weatherConfig[weatherVal]) {
         md += `**天気**: ${weatherConfig[weatherVal].label}\n\n`;
     } else if (i.weather) {
-        md += `**天気**: ${i.weather}\n\n`; // 登録外の天気データもそのまま出力
+        md += `**天気**: ${i.weather}\n\n`;
     }
     
     if (i.content) md += `${i.content}\n\n`;
     
     const images = getAllImagesFromItem(i);
     images.forEach(img => {
-        // 修正前と同様の確実なパス構築ロジックを採用
         const fileRelPath = img.isOriginal ? `originals/${img.originalName}` : (img.mediaName ? `media/${img.mediaName}` : img.src);
 
-        // 動画と画像で出力を出し分け
         if (img.isVideo) {
             md += `[動画ファイル](${fileRelPath})\n\n`;
         } else {
-            // 修正前と同様、Originalの場合は必ずimgタグを使用する（デザイン維持）
             if (img.isOriginal) {
                 md += `<img src="${fileRelPath}" alt="画像" style="max-width:100%; height:auto;" />\n\n`;
             } else {
@@ -3062,7 +3162,6 @@ function exportPDF() {
     const originalFilteredItems = currentFilteredItems;
     const prevLimit = currentDisplayLimit; 
     
-    // 印刷対象のみを描画する
     currentFilteredItems = targets;
     currentDisplayLimit = targets.length; 
     
@@ -3079,7 +3178,6 @@ function exportPDF() {
             if (hasDiaryCheck || hasImageCheck) {
                 const isDiaryChecked = globalSelectedIds.has(itemId);
                 
-                // 画像だけが選択されている場合、テキスト情報を隠す
                 if (!isDiaryChecked) {
                     const prose = card.querySelector('.prose');
                     if (prose) prose.classList.add('print-hide');
@@ -3111,7 +3209,6 @@ function exportPDF() {
             setTimeout(() => {
                 window.print(); 
                 
-                // 印刷が終わったら元の状態に戻す
                 currentFilteredItems = originalFilteredItems;
                 currentDisplayLimit = prevLimit; 
                 
@@ -3250,7 +3347,6 @@ const SmartPrintAdapter = {
     }
 };
 
-// ======= インポートと競合解決の処理 =======
 async function importData(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -3269,7 +3365,6 @@ async function importData(event) {
             let exactMatchCount = 0;
 
             importedItems.forEach(incoming => {
-                // 内容だけでなく、天気などの情報も完全に一致するか安全にチェック
                 const exactMatch = diaryItems.find(existing =>
                     existing.date === incoming.date && 
                     existing.content === incoming.content && 
@@ -3428,7 +3523,6 @@ async function resolveImportConflicts() {
     }
 }
 
-// Service Worker の登録
 if ('serviceWorker' in navigator) { 
     window.addEventListener('load', () => { 
         navigator.serviceWorker.register('./sw.js')
@@ -3437,3 +3531,70 @@ if ('serviceWorker' in navigator) {
     }); 
 }
 
+function toggleImageZoom(event) {
+    if (event) event.stopPropagation();
+    const img = document.getElementById('lightbox-img');
+    const wrapper = document.getElementById('lightbox-content-wrapper');
+    const container = document.getElementById('lightbox-scroll-container');
+    const indicator = document.getElementById('zoom-indicator');
+    
+    if (!img || img.classList.contains('hidden')) return;
+
+    isOriginalSize = !isOriginalSize;
+    
+    if (isOriginalSize) {
+        img.classList.remove('max-w-full', 'max-h-[90vh]', 'object-contain', 'cursor-zoom-in');
+        img.classList.add('cursor-zoom-out');
+        
+        wrapper.classList.remove('flex', 'items-center', 'justify-center', 'max-w-full', 'max-h-[90vh]');
+        if (container) container.classList.remove('flex');
+        
+        img.style.width = 'auto';
+        img.style.minWidth = '150vw';
+        img.style.maxWidth = 'none';
+        img.style.maxHeight = 'none';
+        img.style.height = 'auto';
+        
+        setTimeout(() => {
+            if (container) {
+                container.scrollLeft = (container.scrollWidth - container.clientWidth) / 2;
+                container.scrollTop = (container.scrollHeight - container.clientHeight) / 2;
+            }
+        }, 10);
+        
+        if (indicator) indicator.innerHTML = '<i class="fa-solid fa-magnifying-glass-minus"></i> 縮小';
+    } else {
+        img.classList.add('max-w-full', 'max-h-[90vh]', 'object-contain', 'cursor-zoom-in');
+        img.classList.remove('cursor-zoom-out');
+        
+        wrapper.classList.add('flex', 'items-center', 'justify-center', 'max-w-full', 'max-h-[90vh]');
+        if (container) container.classList.add('flex');
+        
+        img.style.width = '';
+        img.style.minWidth = '';
+        img.style.maxWidth = '';
+        img.style.maxHeight = '';
+        img.style.height = '';
+        
+        if (indicator) indicator.innerHTML = '<i class="fa-solid fa-magnifying-glass-plus"></i> フィット';
+    }
+}
+
+function closeLightbox() {
+    const lightbox = document.getElementById('lightbox-modal');
+    if (!lightbox) return;
+    
+    if (isOriginalSize) {
+        toggleImageZoom();
+    }
+    
+    lightbox.classList.add('opacity-0');
+    setTimeout(() => {
+        lightbox.classList.add('hidden');
+        const video = document.getElementById('lightbox-video');
+        if (video) {
+            video.pause();
+            video.src = '';
+        }
+    }, 300);
+}

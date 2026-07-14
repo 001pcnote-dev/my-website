@@ -1,5 +1,5 @@
 :root { --diary-font-size: 16px; }
-.prose, #entry-content { font-size: var(--diary-font-size) !important; line-height: 1.9 !important; }
+.prose, #entry-content { font-size: var(--diary-font-size); line-height: 1.9; }
 
 body { font-family: 'Noto Sans JP', sans-serif; -webkit-tap-highlight-color: transparent; padding-bottom: 56px; }
 .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 4rem); }

@@ -14,27 +14,37 @@ class CacheDB {
         if (this.db) return;
         if (this.initPromise) return this.initPromise; // 初期化中なら待機
         
-        this.initPromise = new Promise((resolve, reject) => {
+       this.initPromise = new Promise((resolve, reject) => {
             const request = indexedDB.open(this.dbName, this.version);
             request.onupgradeneeded = (e) => {
                 const db = e.target.result;
-                if (!db.objectStoreNames.contains('system_state')) {
+                const oldVersion = e.oldVersion;
+
+                // 初めてアプリを起動した場合
+                if (oldVersion < 1) {
                     db.createObjectStore('system_state');
-                }
-                if (!db.objectStoreNames.contains('render_cache')) {
                     db.createObjectStore('render_cache');
                 }
-                // 【追加】設定データ用ストアをIndexedDBに統合するための準備
-                if (!db.objectStoreNames.contains('settings_state')) {
-                    db.createObjectStore('settings_state');
+                // バージョン1からバージョン2へ上がる時
+                if (oldVersion < 2) {
+                    if (!db.objectStoreNames.contains('settings_state')) {
+                        db.createObjectStore('settings_state');
+                    }
                 }
-                // 【追加】日記データ用ストアをIndexedDBに追加
-                if (!db.objectStoreNames.contains('diary_items')) {
-                    db.createObjectStore('diary_items', { keyPath: 'id' });
+                // バージョン2からバージョン3へ上がる時
+                if (oldVersion < 3) {
+                    if (!db.objectStoreNames.contains('diary_items')) {
+                        db.createObjectStore('diary_items', { keyPath: 'id' });
+                    }
                 }
             };
             request.onsuccess = (e) => {
                 this.db = e.target.result;
+                // 他のタブ等でデータベースが更新された際、競合してエラーになるのを防ぐ
+                this.db.onversionchange = () => {
+                    this.db.close();
+                    this.db = null;
+                };
                 resolve();
             };
             request.onerror = (e) => {
@@ -48,33 +58,59 @@ class CacheDB {
     async get(storeName, key) {
         if (!this.db) await this.init();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(storeName, 'readonly');
-            const store = tx.objectStore(storeName);
-            const req = store.get(key);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
+            try {
+                // 保存場所が存在しない場合は安全に空のデータを返す
+                if (!this.db.objectStoreNames.contains(storeName)) {
+                    return resolve(null);
+                }
+                const tx = this.db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const req = store.get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            } catch (e) {
+                console.warn("読み込みをスキップしました:", e);
+                resolve(null); // エラーでアプリが止まるのを防ぐ
+            }
         });
     }
 
     async set(storeName, key, value) {
         if (!this.db) await this.init();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(storeName, 'readwrite');
-            const store = tx.objectStore(storeName);
-            const req = store.put(value, key);
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            try {
+                // 保存場所が存在しない場合は安全に処理を終了する
+                if (!this.db.objectStoreNames.contains(storeName)) {
+                    return resolve();
+                }
+                const tx = this.db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const req = store.put(value, key);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            } catch (e) {
+                console.warn("保存をスキップしました:", e);
+                resolve(); // エラーでアプリが止まるのを防ぐ
+            }
         });
     }
 
     async clear(storeName) {
         if (!this.db) await this.init();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(storeName, 'readwrite');
-            const store = tx.objectStore(storeName);
-            const req = store.clear();
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            try {
+                if (!this.db.objectStoreNames.contains(storeName)) {
+                    return resolve();
+                }
+                const tx = this.db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const req = store.clear();
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            } catch (e) {
+                console.warn("クリアをスキップしました:", e);
+                resolve();
+            }
         });
     }
 
@@ -82,11 +118,19 @@ class CacheDB {
     async getAll(storeName) {
         if (!this.db) await this.init();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(storeName, 'readonly');
-            const store = tx.objectStore(storeName);
-            const req = store.getAll();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
+            try {
+                if (!this.db.objectStoreNames.contains(storeName)) {
+                    return resolve([]);
+                }
+                const tx = this.db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            } catch (e) {
+                console.warn("一括読み込みをスキップしました:", e);
+                resolve([]);
+            }
         });
     }
 
@@ -94,11 +138,19 @@ class CacheDB {
     async put(storeName, value) {
         if (!this.db) await this.init();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(storeName, 'readwrite');
-            const store = tx.objectStore(storeName);
-            const req = store.put(value);
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            try {
+                if (!this.db.objectStoreNames.contains(storeName)) {
+                    return resolve();
+                }
+                const tx = this.db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const req = store.put(value);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            } catch (e) {
+                console.warn("追加保存をスキップしました:", e);
+                resolve();
+            }
         });
     }
 
@@ -106,11 +158,19 @@ class CacheDB {
     async delete(storeName, key) {
         if (!this.db) await this.init();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(storeName, 'readwrite');
-            const store = tx.objectStore(storeName);
-            const req = store.delete(key);
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            try {
+                if (!this.db.objectStoreNames.contains(storeName)) {
+                    return resolve();
+                }
+                const tx = this.db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const req = store.delete(key);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            } catch (e) {
+                console.warn("削除をスキップしました:", e);
+                resolve();
+            }
         });
     }
 }

@@ -151,7 +151,6 @@
         </button>
     </nav>
 
-    <!-- （各種モーダル群：省略せずに全て配置） -->
     <div id="folder-menu" class="fixed bottom-14 left-2 z-50 bg-white/95 dark:bg-slate-800/95 backdrop-blur-lg rounded-2xl p-2 shadow-2xl border border-slate-200 dark:border-slate-700 flex flex-col gap-1 w-56 transition-all duration-200 transform origin-bottom-left scale-90 opacity-0 pointer-events-none no-print">
         <div class="flex justify-between items-center px-2 py-1 border-b border-slate-100 dark:border-slate-700 mb-1">
             <span class="text-[10px] font-bold text-slate-400">検索フォルダ</span>
@@ -411,13 +410,15 @@
                 <button onclick="closeLightbox()" class="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"><i class="fa-solid fa-xmark text-lg"></i></button>
             </div>
         </div>
-        <div id="lightbox-scroll-container" class="flex-1 overflow-auto flex items-center justify-center p-4 no-scrollbar relative">
-            <button id="lightbox-prev-btn" onclick="navigateLightbox(-1, event)" class="absolute left-4 z-20 w-10 h-10 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors hidden backdrop-blur-sm"><i class="fa-solid fa-chevron-left text-lg"></i></button>
-            <div id="lightbox-content-wrapper" class="max-w-full max-h-[90vh] flex items-center justify-center relative">
+        <div id="lightbox-scroll-container" class="flex-1 overflow-auto flex p-4 no-scrollbar relative">
+            <button id="lightbox-prev-btn" onclick="navigateLightbox(-1, event)" class="fixed left-4 top-1/2 -translate-y-1/2 z-20 w-10 h-10 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors hidden backdrop-blur-sm"><i class="fa-solid fa-chevron-left text-lg"></i></button>
+            
+            <div id="lightbox-content-wrapper" class="m-auto max-w-full max-h-[90vh] flex items-center justify-center relative">
                 <img id="lightbox-img" src="" alt="Zoomed view" class="max-w-full max-h-[90vh] rounded-lg shadow-2xl object-contain transition-all duration-300 transform cursor-zoom-in" onclick="toggleImageZoom(event)"/>
                 <video id="lightbox-video" controls class="max-w-full max-h-[90vh] rounded-lg shadow-2xl object-contain hidden" onclick="event.stopPropagation()"></video>
             </div>
-            <button id="lightbox-next-btn" onclick="navigateLightbox(1, event)" class="absolute right-4 z-20 w-10 h-10 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors hidden backdrop-blur-sm"><i class="fa-solid fa-chevron-right text-lg"></i></button>
+            
+            <button id="lightbox-next-btn" onclick="navigateLightbox(1, event)" class="fixed right-4 top-1/2 -translate-y-1/2 z-20 w-10 h-10 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors hidden backdrop-blur-sm"><i class="fa-solid fa-chevron-right text-lg"></i></button>
         </div>
     </div>
 
@@ -465,15 +466,14 @@
             </div>
             <div class="px-5 py-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 rounded-b-2xl flex items-center justify-end space-x-3 shrink-0 pb-safe">
                 <button onclick="closeConflictModal()" class="px-4 py-2 text-sm font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl transition-colors">キャンセル</button>
-                <button onclick="resolveConflicts()" class="px-5 py-2 text-sm font-medium text-white bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl shadow-md hover:opacity-90 active:scale-98 transition-all">解決する</button>
+                <button onclick="resolveImportConflicts()" class="px-5 py-2 text-sm font-medium text-white bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl shadow-md hover:opacity-90 active:scale-98 transition-all">解決する</button>
             </div>
         </div>
     </div>
 
-    <!-- JavaScript の読み込み（JSファイル名は適宜変更してください） -->
     <script src="./js/db.js" defer></script>
     <script src="./js/app.js" defer></script>
-<script>
+    <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('./sw.js')
