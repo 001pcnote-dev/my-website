@@ -369,6 +369,37 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await checkAndShowStartupSync();
 
+    // Androidスマホ等でのPDF出力時に、全部の日記がプレビューに出ないよう制御
+    window.addEventListener('beforeprint', () => {
+        const container = document.getElementById('diary-container');
+        const editorModal = document.getElementById('editor-modal');
+        const header = document.getElementById('main-header');
+        
+        // 1. 日記の編集・詳細画面を開いている場合、裏のリスト全体を隠す
+        if (editorModal && !editorModal.classList.contains('hidden')) {
+            if (container) container.classList.add('hidden', 'no-print-temp');
+            if (header) header.classList.add('hidden', 'no-print-temp');
+            return;
+        }
+
+        // 2. チェックボックスで選択した日記がある場合、選択していないものを隠す
+        if (globalSelectedIds && globalSelectedIds.size > 0 && container) {
+            container.querySelectorAll('.diary-card').forEach(card => {
+                const id = card.getAttribute('data-id');
+                if (!globalSelectedIds.has(id)) {
+                    card.classList.add('hidden', 'no-print-temp');
+                }
+            });
+        }
+    });
+
+    window.addEventListener('afterprint', () => {
+        // 印刷完了・キャンセル後に、非表示にした日記を元に戻す
+        document.querySelectorAll('.no-print-temp').forEach(el => {
+            el.classList.remove('hidden', 'no-print-temp');
+        });
+    });
+
     // 全ての初期化が完了した後、安全にアニメーションを再有効化
     setTimeout(() => {
         document.body.classList.add('transition-colors', 'duration-300');
