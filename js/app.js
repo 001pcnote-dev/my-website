@@ -3155,46 +3155,60 @@ function exportPDF() {
         return;
     }
 
-    const container = document.getElementById('diary-container'); 
-    const wasContainerHidden = container.classList.contains('hidden'); 
-    if (wasContainerHidden) container.classList.remove('hidden');
+    // すでに存在していれば一度削除して再作成（ゴミが残らないようにする）
+    let printContainer = document.getElementById('print-export-container');
+    if (printContainer) {
+        printContainer.remove();
+    }
+    printContainer = document.createElement('div');
+    printContainer.id = 'print-export-container';
+    document.body.appendChild(printContainer);
     
-    const originalFilteredItems = currentFilteredItems;
-    const prevLimit = currentDisplayLimit; 
-    
-    currentFilteredItems = targets;
-    currentDisplayLimit = targets.length; 
-    
-    container.innerHTML = '';
+    // 印刷用のデータを安全に一時コンテナに構築
     targets.forEach(item => { 
-        container.appendChild(createCardElement(item, true)); 
+        const isDiaryChecked = hasDiaryCheck ? globalSelectedIds.has(item.id) : false;
+        const hasSpecificImages = hasImageCheck && item.mediaFiles && item.mediaFiles.length > 0;
+        
+        let printItem = { ...item };
+        
+        // 画像のみ指定されていて、日記自体はチェックされていない場合、テキストなどを空にする
+        if ((hasDiaryCheck || hasImageCheck) && !isDiaryChecked && hasSpecificImages) {
+            printItem.content = "";
+            printItem.tags = [];
+            printItem.updatedAt = null;
+        }
+        
+        // 元のDOMを壊さず、一時コンテナにカードを生成して追加
+        printContainer.appendChild(createCardElement(printItem, true)); 
     });
     
-    setTimeout(async () => {
-        const allCards = document.querySelectorAll('.diary-card'); 
-        allCards.forEach(card => { 
-            const itemId = card.getAttribute('data-id'); 
-            
-            if (hasDiaryCheck || hasImageCheck) {
-                const isDiaryChecked = globalSelectedIds.has(itemId);
-                
-                if (!isDiaryChecked) {
-                    const prose = card.querySelector('.prose');
-                    if (prose) prose.classList.add('print-hide');
-                    
-                    const tags = card.querySelector('.flex.flex-wrap.gap-1\\.5.mt-3');
-                    if (tags) tags.classList.add('print-hide');
-                    
-                    const updateInfo = card.querySelector('.fa-clock-rotate-left')?.parentNode;
-                    if (updateInfo) updateInfo.classList.add('print-hide');
+    showToast("印刷レイアウトを準備中...");
+
+    // メディアURLの適用処理を一時コンテナに対して行う
+    const applyMediaUrlsForPrint = async () => {
+        const cachedFiles = await appDB.getAll('render_cache') || [];
+        const cacheMap = new Map(cachedFiles.map(f => [f.path, f.blob]));
+        
+        const mediaElements = printContainer.querySelectorAll('[data-path]');
+        for (const el of mediaElements) {
+            const path = el.getAttribute('data-path');
+            if (cacheMap.has(path)) {
+                const blob = cacheMap.get(path);
+                const url = URL.createObjectURL(blob);
+                if (el.tagName === 'IMG') {
+                    el.src = url;
+                } else if (el.tagName === 'VIDEO') {
+                    el.src = url;
                 }
             }
-        });
+        }
+    };
 
-        showToast("印刷レイアウトを準備中...");
-        await applyMediaUrls();
+    setTimeout(async () => {
+        await applyMediaUrlsForPrint();
 
-        const visibleImages = Array.from(container.querySelectorAll('img:not(.print-hide)'));
+        // 一時コンテナ内のすべての画像読み込み完了を待機
+        const visibleImages = Array.from(printContainer.querySelectorAll('img'));
         const imagePromises = visibleImages.map(img => {
             if (img.complete) return Promise.resolve();
             return new Promise(resolve => {
@@ -3205,24 +3219,36 @@ function exportPDF() {
 
         await Promise.all(imagePromises);
 
-        requestAnimationFrame(() => {
-            setTimeout(() => {
-                window.print(); 
+        // レンダリング・レイアウト計算完了のための待機
+        setTimeout(() => {
+            let isRestored = false;
+            
+            const cleanupPrintContainer = () => {
+                if (isRestored) return;
+                isRestored = true;
                 
-                currentFilteredItems = originalFilteredItems;
-                currentDisplayLimit = prevLimit; 
+                window.removeEventListener('afterprint', cleanupPrintContainer);
                 
-                allCards.forEach(c => {
-                    c.classList.remove('print-hide');
-                    c.querySelectorAll('.print-hide').forEach(el => el.classList.remove('print-hide'));
-                }); 
-                
-                if (wasContainerHidden) container.classList.add('hidden'); 
-                filterDiaryItems(false); 
-            }, 100);
-        });
+                // 印刷が終わったら、一時コンテナを物理削除するだけ
+                // 元のリストDOM（#diary-containerなど）は一切変更していないため、確実にそのまま残ります。
+                if (printContainer) {
+                    printContainer.remove();
+                }
+                showToast("元の表示に戻りました");
+            };
+
+            // 印刷終了イベント
+            window.addEventListener('afterprint', cleanupPrintContainer);
+            
+            // 印刷実行
+            window.print(); 
+            
+            // ダイアログが閉じた後の予備安全策（同期的なブロックを抜けた直後に実行）
+            setTimeout(cleanupPrintContainer, 500);
+
+        }, 800); // スマホでのレンダリング反映のための待機時間
         
-    }, 50); 
+    }, 100); 
 }
 
 async function exportOriginalMedia() {
