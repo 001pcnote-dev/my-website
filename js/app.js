@@ -377,8 +377,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // 1. 日記の編集・詳細画面を開いている場合、裏のリスト全体を隠す
         if (editorModal && !editorModal.classList.contains('hidden')) {
-            if (container) container.classList.add('hidden', 'no-print-temp');
-            if (header) header.classList.add('hidden', 'no-print-temp');
+            if (container) {
+                container.classList.add('hidden', 'no-print-temp');
+                container.style.setProperty('display', 'none', 'important');
+            }
+            if (header) {
+                header.classList.add('hidden', 'no-print-temp');
+                header.style.setProperty('display', 'none', 'important');
+            }
             return;
         }
 
@@ -388,6 +394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const id = card.getAttribute('data-id');
                 if (!globalSelectedIds.has(id)) {
                     card.classList.add('hidden', 'no-print-temp');
+                    card.style.setProperty('display', 'none', 'important');
                 }
             });
         }
@@ -397,6 +404,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 印刷完了・キャンセル後に、非表示にした日記を元に戻す
         document.querySelectorAll('.no-print-temp').forEach(el => {
             el.classList.remove('hidden', 'no-print-temp');
+            el.style.removeProperty('display');
         });
     });
 
