@@ -1875,7 +1875,7 @@ function createCardElement(item, isSearching) {
                 let parts = [];
                 if (meta.date) parts.push(`<span class="inline-flex items-center gap-1"><i class="fa-solid fa-camera"></i>${meta.date.split(' ')[0]}</span>`); 
                 if (meta.location) parts.push(`<span class="inline-flex items-center gap-1"><i class="fa-solid fa-location-dot"></i></span>`);
-                if (parts.length > 0) metaBadge = `<div class="absolute top-2 left-2 bg-black/50 text-white/90 backdrop-blur-md rounded-lg px-1.5 py-0.5 text-[9px] font-medium tracking-wide z-10 flex items-center gap-1.5 shadow-sm pointer-events-none">${parts.join('')}</div>`;
+                if (parts.length > 0) metaBadge = `<div class="absolute top-2 left-2 bg-black/50 text-white/90 backdrop-blur-md rounded-lg px-1.5 py-0.5 text-[9px] font-medium tracking-wide z-10 flex items-center gap-1.5 shadow-sm pointer-events-none no-print print:hidden">${parts.join('')}</div>`;
             }
             return { originalBtn, metaBadge };
         };
@@ -2436,9 +2436,8 @@ function renderAlbum() {
 
             let mediaHtml = '';
             if (images.length === 1) {
+                // 画像が1枚のときは、存在しない2枚目・3枚目の処理をスキップして1枚だけを安全に表示します
                 mediaHtml = `<div class="relative w-full h-full flex items-center justify-center p-3 overflow-hidden">`;
-                if (images[2]) mediaHtml += `<img src="${images[2].src}" ${images[2].pendingAttr} class="absolute w-[85%] h-[85%] object-contain bg-slate-100 dark:bg-slate-900 rounded-xl shadow-sm transform rotate-4 translate-x-2 translate-y-1 opacity-40 blur-[0.5px]" />`;
-                if (images[1]) mediaHtml += `<img src="${images[1].src}" ${images[1].pendingAttr} class="absolute w-[88%] h-[88%] object-contain bg-slate-100 dark:bg-slate-900 rounded-xl shadow-md transform -rotate-3 -translate-x-1 -translate-y-1 opacity-70" />`;
                 mediaHtml += `<img src="${images[0].src}" ${images[0].pendingAttr} class="relative w-[92%] h-[92%] object-contain bg-slate-100 dark:bg-slate-900 rounded-xl shadow-md transition-transform duration-300 group-hover:scale-[1.02] z-10" />`;
                 mediaHtml += `</div>`;
             } else {
@@ -3162,6 +3161,17 @@ function exportPDF() {
     }
     printContainer = document.createElement('div');
     printContainer.id = 'print-export-container';
+    
+    // 【修正箇所】 Androidでのレンダリング回避対策:
+    // CSSの display:none だとブラウザが画像ロードやレイアウト計算をスキップするため、
+    // JavaScriptで一時的に画面外に可視状態で配置してレンダリングを強制させます。
+    printContainer.style.position = 'absolute';
+    printContainer.style.top = '-9999px';
+    printContainer.style.left = '-9999px';
+    printContainer.style.width = '100%';
+    printContainer.style.visibility = 'hidden'; 
+    printContainer.style.display = 'block';
+    
     document.body.appendChild(printContainer);
     
     // 印刷用のデータを安全に一時コンテナに構築
@@ -3186,20 +3196,16 @@ function exportPDF() {
 
     // メディアURLの適用処理を一時コンテナに対して行う
     const applyMediaUrlsForPrint = async () => {
-        const cachedFiles = await appDB.getAll('render_cache') || [];
-        const cacheMap = new Map(cachedFiles.map(f => [f.path, f.blob]));
-        
-        const mediaElements = printContainer.querySelectorAll('[data-path]');
+        const mediaElements = printContainer.querySelectorAll('[data-pending-media]');
         for (const el of mediaElements) {
-            const path = el.getAttribute('data-path');
-            if (cacheMap.has(path)) {
-                const blob = cacheMap.get(path);
-                const url = URL.createObjectURL(blob);
-                if (el.tagName === 'IMG') {
-                    el.src = url;
-                } else if (el.tagName === 'VIDEO') {
-                    el.src = url;
+            const mediaName = el.getAttribute('data-pending-media');
+            if (mediaName) {
+                const url = await loadMediaUrl(mediaName);
+                if (url) {
+                    if (el.tagName === 'IMG') el.src = url;
+                    if (el.tagName === 'VIDEO' && el.hasAttribute('poster')) el.poster = url;
                 }
+                el.removeAttribute('data-pending-media');
             }
         }
     };
@@ -3230,7 +3236,6 @@ function exportPDF() {
                 window.removeEventListener('afterprint', cleanupPrintContainer);
                 
                 // 印刷が終わったら、一時コンテナを物理削除するだけ
-                // 元のリストDOM（#diary-containerなど）は一切変更していないため、確実にそのまま残ります。
                 if (printContainer) {
                     printContainer.remove();
                 }
@@ -3240,17 +3245,25 @@ function exportPDF() {
             // 印刷終了イベント
             window.addEventListener('afterprint', cleanupPrintContainer);
             
+            // 【修正箇所】 印刷ダイアログ表示時に画面外配置のインラインスタイルを解除し、CSSの @media print にレイアウトを任せる
+            printContainer.style.position = '';
+            printContainer.style.top = '';
+            printContainer.style.left = '';
+            printContainer.style.width = '';
+            printContainer.style.visibility = '';
+            printContainer.style.display = ''; 
+            
             // 印刷実行
             window.print(); 
             
-            // ダイアログが閉じた後の予備安全策（同期的なブロックを抜けた直後に実行）
-            setTimeout(cleanupPrintContainer, 500);
+            // 【修正箇所】 Android等で window.print() が非同期動作し、ダイアログ表示前にDOMが消える問題への対策
+            // フォールバックの時間を十分に長く（500ms → 15000ms）する
+            setTimeout(cleanupPrintContainer, 15000);
 
-        }, 800); // スマホでのレンダリング反映のための待機時間
+        }, 800); 
         
     }, 100); 
 }
-
 async function exportOriginalMedia() {
     const targets = getTargetsForExport(); 
     let targetImages = [];
