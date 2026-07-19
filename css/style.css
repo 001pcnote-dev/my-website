@@ -64,3 +64,61 @@ header { position: fixed; top: 0; width: 100%; transition: transform 0.3s cubic-
 .media-item-container img:not([src]) {
     visibility: hidden; /* 画像URLが空、またはセットされるまでの間、要素自体を隠す */
 }
+/* 印刷用の一時コンテナのスタイル */
+#print-export-container {
+    display: none;
+}
+
+@media print {
+    /* 印刷時は、元のアプリ画面全体を非表示にする */
+    body > *:not(#print-export-container) {
+        display: none !important;
+    }
+    /* 印刷用の一時コンテナだけを表示する */
+    #print-export-container {
+        display: block !important;
+        background: white !important;
+        color: black !important;
+    }
+    
+    .diary-card { 
+        page-break-inside: avoid !important; 
+        break-inside: avoid !important; 
+        background: white !important; 
+        border: 1px solid #e2e8f0 !important; 
+        box-shadow: none !important; 
+        padding: 16px !important; 
+        margin-bottom: 24px !important; 
+        display: block !important; 
+        overflow: hidden !important;
+    }
+    .diary-card .grid { 
+        display: flex !important; 
+        flex-wrap: wrap !important; 
+        gap: 8px !important; 
+    }
+    .diary-card .media-item-container { 
+        width: 120px !important; 
+        height: 120px !important; 
+        aspect-ratio: auto !important; 
+        margin-bottom: 8px !important; 
+        display: flex !important; 
+        align-items: center !important; 
+        justify-content: center !important; 
+        page-break-inside: avoid !important; 
+        break-inside: avoid !important; 
+        border: 1px solid #e2e8f0 !important; 
+        background: #f8fafc !important; 
+        position: relative !important;
+    }
+    .diary-card img, .diary-card video { 
+        max-width: 100% !important; 
+        max-height: 100% !important; 
+        width: auto !important; 
+        height: auto !important; 
+        object-fit: contain !important; 
+        display: block !important; 
+        margin: 0 auto !important; 
+        border-radius: 0.5rem !important; 
+    }
+}

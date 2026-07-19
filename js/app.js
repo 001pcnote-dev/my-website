@@ -131,7 +131,15 @@ async function loadMediaUrl(mediaName) {
         const mediaDir = await dirHandle.getDirectoryHandle('media');
         const fileHandle = await mediaDir.getFileHandle(mediaName);
         const file = await fileHandle.getFile();
-        const url = URL.createObjectURL(file);
+        
+        // 修正: AndroidのPDF出力で白紙になるのを防ぐため、Data URL（Base64）に変換して読み込む
+        const url = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        
         mediaUrlCache.set(mediaName, url);
         return url;
     } catch (e) {
@@ -156,9 +164,7 @@ async function applyMediaUrls() {
 
 // キャッシュ済みの不要なメディアURLを解放し、メモリリークを防止
 function clearMediaUrlCache() {
-    mediaUrlCache.forEach(url => {
-        URL.revokeObjectURL(url);
-    });
+    // 修正: Data URLに変更したため、revokeObjectURLによるURLの破棄は不要になり、単にキャッシュを空にするだけで済みます
     mediaUrlCache.clear();
 }
 
