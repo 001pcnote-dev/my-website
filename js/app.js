@@ -3230,6 +3230,8 @@ function exportPDF() {
 
         await Promise.all(imagePromises);
 
+        // 修正後のこのブロック全体と差し替えてください
+        // レンダリング・レイアウト計算完了のための待機を強化
         setTimeout(() => {
             let isRestored = false;
             
@@ -3247,19 +3249,19 @@ function exportPDF() {
 
             window.addEventListener('afterprint', cleanupPrintContainer);
             
-            // 修正箇所: ここにあった printContainer のインラインスタイル解除処理を削除しました。
-            // インラインスタイルが残っていても、CSSの @media print 側の !important 指定が優先されるため、
-            // 印刷は正常に行われ、かつ通常画面でのチラつきは発生しなくなります。
-            
+            // レンダリングの余裕を確保する
             setTimeout(() => {
+                // 強制的に再レイアウトを促す
+                printContainer.style.display = 'block'; 
+                
                 window.print(); 
                 
                 setTimeout(cleanupPrintContainer, 15000);
-            }, 300); 
+            }, 1000); 
 
-        }, 800); 
+        }, 2000); 
         
-    }, 100); 
+    }, 500); 
 }
 async function exportOriginalMedia() {
     const targets = getTargetsForExport(); 
