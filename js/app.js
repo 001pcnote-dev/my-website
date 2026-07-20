@@ -3172,9 +3172,8 @@ function exportPDF() {
     printContainer = document.createElement('div');
     printContainer.id = 'print-export-container';
     
-    // 【修正箇所】 Androidでのレンダリング回避対策:
-    // CSSの display:none だとブラウザが画像ロードやレイアウト計算をスキップするため、
-    // JavaScriptで一時的に画面外に可視状態で配置してレンダリングを強制させます。
+    // Androidでのレンダリング回避対策:
+    // JSで一時的に画面外に可視状態で配置してレンダリングを強制させます。
     printContainer.style.position = 'absolute';
     printContainer.style.top = '-9999px';
     printContainer.style.left = '-9999px';
@@ -3191,20 +3190,17 @@ function exportPDF() {
         
         let printItem = { ...item };
         
-        // 画像のみ指定されていて、日記自体はチェックされていない場合、テキストなどを空にする
         if ((hasDiaryCheck || hasImageCheck) && !isDiaryChecked && hasSpecificImages) {
             printItem.content = "";
             printItem.tags = [];
             printItem.updatedAt = null;
         }
         
-        // 元のDOMを壊さず、一時コンテナにカードを生成して追加
         printContainer.appendChild(createCardElement(printItem, true)); 
     });
     
     showToast("印刷レイアウトを準備中...");
 
-    // メディアURLの適用処理を一時コンテナに対して行う
     const applyMediaUrlsForPrint = async () => {
         const mediaElements = printContainer.querySelectorAll('[data-pending-media]');
         for (const el of mediaElements) {
@@ -3223,7 +3219,6 @@ function exportPDF() {
     setTimeout(async () => {
         await applyMediaUrlsForPrint();
 
-        // 一時コンテナ内のすべての画像読み込み完了を待機
         const visibleImages = Array.from(printContainer.querySelectorAll('img'));
         const imagePromises = visibleImages.map(img => {
             if (img.complete) return Promise.resolve();
@@ -3235,7 +3230,6 @@ function exportPDF() {
 
         await Promise.all(imagePromises);
 
-        // レンダリング・レイアウト計算完了のための待機
         setTimeout(() => {
             let isRestored = false;
             
@@ -3245,33 +3239,23 @@ function exportPDF() {
                 
                 window.removeEventListener('afterprint', cleanupPrintContainer);
                 
-                // 印刷が終わったら、一時コンテナを物理削除するだけ
                 if (printContainer) {
                     printContainer.remove();
                 }
                 showToast("元の表示に戻りました");
             };
 
-            // 印刷終了イベント
             window.addEventListener('afterprint', cleanupPrintContainer);
             
-            // 【修正箇所】 印刷ダイアログ表示時に画面外配置のインラインスタイルを解除し、CSSの @media print にレイアウトを任せる
-            printContainer.style.position = '';
-            printContainer.style.top = '';
-            printContainer.style.left = '';
-            printContainer.style.width = '';
-            printContainer.style.visibility = '';
-            printContainer.style.display = ''; 
+            // 修正箇所: ここにあった printContainer のインラインスタイル解除処理を削除しました。
+            // インラインスタイルが残っていても、CSSの @media print 側の !important 指定が優先されるため、
+            // 印刷は正常に行われ、かつ通常画面でのチラつきは発生しなくなります。
             
-            // Androidで白紙になる対策：スタイル解除後、ブラウザが画面を描画するのを少し待ってから印刷を実行する
             setTimeout(() => {
-                // 印刷実行
                 window.print(); 
                 
-                // 【修正箇所】 Android等で window.print() が非同期動作し、ダイアログ表示前にDOMが消える問題への対策
-                // フォールバックの時間を十分に長く（500ms → 15000ms）する
                 setTimeout(cleanupPrintContainer, 15000);
-            }, 300); // 300ミリ秒待機して確実に出力させる
+            }, 300); 
 
         }, 800); 
         
