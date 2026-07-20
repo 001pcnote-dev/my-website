@@ -132,7 +132,7 @@ async function loadMediaUrl(mediaName) {
         const fileHandle = await mediaDir.getFileHandle(mediaName);
         const file = await fileHandle.getFile();
         
-        // 修正: AndroidのPDF出力で白紙になるのを防ぐため、Data URL（Base64）に変換して読み込む
+        // 修正: AndroidのpdfPDF出力で白紙になるのを防ぐため、Data URL（Base64）に変換して読み込む
         const url = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result);
@@ -143,6 +143,10 @@ async function loadMediaUrl(mediaName) {
         mediaUrlCache.set(mediaName, url);
         return url;
     } catch (e) {
+        // 天気アイコン（fa-sun等）などのファイルが存在しないメディア名ではない場合は空文字を返す
+        if (mediaName.startsWith('fa-') || mediaName === 'sunny' || mediaName === 'cloudy' || mediaName === 'rainy' || mediaName === 'snowy') {
+            return mediaName;
+        }
         return '';
     }
 }
@@ -2019,7 +2023,9 @@ function filterDiaryItems(resetLimit = true) {
         const quickInput = document.getElementById('search-input').value.trim(); 
         const quickQueries = quickInput ? quickInput.split(/[\s ,]+/).map(s => fuzzyString(s)).filter(s => s) : [];
         const tagFilter = document.getElementById('tag-filter').value; 
-        const weatherFilter = document.querySelector('input[name="filter-weather"]:checked')?.value || ""; 
+        // 絞り込み用のサイドバーや検索パネルにある「filter-weather」を明確に指定して取得します
+        const weatherActiveRadio = document.querySelector('input[name="filter-weather"]:checked');
+        const weatherFilter = weatherActiveRadio ? weatherActiveRadio.value : ""; 
         const sortOrder = document.getElementById('modal-sort-select').value;
         const andInput = document.getElementById('and-input').value; 
         const andTerms = andInput ? andInput.split(/[\s ,]+/).map(s => fuzzyString(s)).filter(s => s) : [];
@@ -2787,8 +2793,11 @@ function openModal(id = null) {
             document.getElementById('entry-tags').value = (item.tags || []).join(', ');
             
             if (item.weather) {
-                const r = document.querySelector(`input[name="weather"][value="${item.weather}"]`);
-                if(r) r.checked = true;
+                document.querySelectorAll('input[name="weather"]').forEach(radio => {
+                    if (radio.value === item.weather) {
+                        radio.checked = true;
+                    }
+                });
             }
             
             let loadedMedia = item.mediaFiles || (item.media ? [item.media] : []);
@@ -3153,7 +3162,7 @@ function exportData(type) {
     toggleSettings();
 }
 
-function exportPDF() {
+async function exportPDF() {
     const hasDiaryCheck = globalSelectedIds.size > 0;
     const hasImageCheck = globalSelectedImageIds.size > 0;
     toggleSettings(); 
@@ -3164,31 +3173,21 @@ function exportPDF() {
         return;
     }
 
-    // すでに存在していれば一度削除して再作成（ゴミが残らないようにする）
-    let printContainer = document.getElementById('print-export-container');
-    if (printContainer) {
-        printContainer.remove();
-    }
-    printContainer = document.createElement('div');
-    printContainer.id = 'print-export-container';
+    showToast("印刷データを構築中...");
+
+    // 1. メモリ上に「一時コンテナ」を作成
+    const tempContainer = document.createElement('div');
     
-    // Androidでのレンダリング回避対策:
-    // JSで一時的に画面外に可視状態で配置してレンダリングを強制させます。
-    printContainer.style.position = 'absolute';
-    printContainer.style.top = '-9999px';
-    printContainer.style.left = '-9999px';
-    printContainer.style.width = '100%';
-    printContainer.style.visibility = 'hidden'; 
-    printContainer.style.display = 'block';
-    
-    document.body.appendChild(printContainer);
-    
-    // 印刷用のデータを安全に一時コンテナに構築
     targets.forEach(item => { 
         const isDiaryChecked = hasDiaryCheck ? globalSelectedIds.has(item.id) : false;
         const hasSpecificImages = hasImageCheck && item.mediaFiles && item.mediaFiles.length > 0;
         
         let printItem = { ...item };
+        
+        // 追加：日付データに含まれる「T」を半角スペースに置換し、日付と時間を離す
+        if (printItem.date && typeof printItem.date === 'string') {
+            printItem.date = printItem.date.replace('T', ' ');
+        }
         
         if ((hasDiaryCheck || hasImageCheck) && !isDiaryChecked && hasSpecificImages) {
             printItem.content = "";
@@ -3196,72 +3195,241 @@ function exportPDF() {
             printItem.updatedAt = null;
         }
         
-        printContainer.appendChild(createCardElement(printItem, true)); 
+        // メモリ上のコンテナに要素を追加
+        tempContainer.appendChild(createCardElement(printItem, true)); 
     });
     
-    showToast("印刷レイアウトを準備中...");
-
-    const applyMediaUrlsForPrint = async () => {
-        const mediaElements = printContainer.querySelectorAll('[data-pending-media]');
-        for (const el of mediaElements) {
-            const mediaName = el.getAttribute('data-pending-media');
-            if (mediaName) {
-                const url = await loadMediaUrl(mediaName);
-                if (url) {
-                    if (el.tagName === 'IMG') el.src = url;
-                    if (el.tagName === 'VIDEO' && el.hasAttribute('poster')) el.poster = url;
-                }
-                el.removeAttribute('data-pending-media');
+    // 2. 非同期で画像（Base64）を適用
+    const mediaElements = tempContainer.querySelectorAll('[data-pending-media]');
+    for (const el of mediaElements) {
+        const mediaName = el.getAttribute('data-pending-media');
+        if (mediaName) {
+            const url = await loadMediaUrl(mediaName); 
+            if (url) {
+                if (el.tagName === 'IMG') el.src = url;
+                if (el.tagName === 'VIDEO' && el.hasAttribute('poster')) el.poster = url;
             }
+            el.removeAttribute('data-pending-media');
         }
-    };
+    }
 
-    setTimeout(async () => {
-        await applyMediaUrlsForPrint();
+    // 3. 画面外に「見えない別のHTML（Iframe）」を作成
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'absolute';
+    iframe.style.width = '0px';
+    iframe.style.height = '0px';
+    iframe.style.border = 'none';
+    iframe.style.visibility = 'hidden';
+    document.body.appendChild(iframe);
 
-        const visibleImages = Array.from(printContainer.querySelectorAll('img'));
-        const imagePromises = visibleImages.map(img => {
-            if (img.complete) return Promise.resolve();
-            return new Promise(resolve => {
-                img.onload = resolve;
-                img.onerror = resolve; 
-            });
-        });
+    // 印刷用の裏画面に、親画面のCSS（アイコンフォント等）を丸ごと引き継ぐ
+    const styleLinks = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+        .map(link => link.outerHTML).join('\n');
 
-        await Promise.all(imagePromises);
-
-        // 修正後のこのブロック全体と差し替えてください
-        // レンダリング・レイアウト計算完了のための待機を強化
-        setTimeout(() => {
-            let isRestored = false;
-            
-            const cleanupPrintContainer = () => {
-                if (isRestored) return;
-                isRestored = true;
-                
-                window.removeEventListener('afterprint', cleanupPrintContainer);
-                
-                if (printContainer) {
-                    printContainer.remove();
+    // 4. 新しいHTMLの中に、印刷専用のスタイルとデータを書き込む
+    const frameDoc = iframe.contentWindow.document;
+    frameDoc.open();
+    frameDoc.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>SmartDiary Print</title>
+            ${styleLinks}
+            <style>
+                /* 全体リセット：崩れを徹底防止 */
+                * { 
+                    box-sizing: border-box !important; 
+                    -webkit-print-color-adjust: exact !important; 
+                    print-color-adjust: exact !important; 
                 }
-                showToast("元の表示に戻りました");
-            };
+                body {
+                    font-family: system-ui, -apple-system, sans-serif; 
+                    padding: 20px; 
+                    color: #1e293b !important; 
+                    background: white !important; 
+                    margin: 0; 
+                    line-height: 1.6;
+                }
+                
+                /* 日記カード全体の囲い枠（ページをまたぐ途中で割れないように設定） */
+                .diary-card { 
+                    border: 1px solid #e2e8f0 !important; 
+                    border-radius: 12px !important; 
+                    padding: 20px !important; 
+                    margin-bottom: 24px !important; 
+                    page-break-inside: avoid !important; 
+                    break-inside: avoid !important;
+                    background: white !important;
+                    display: block !important;
+                    position: relative !important;
+                }
+                
+                /* 日付・天気ヘッダー領域の配置（絶対に改行させない強力な指定） */
+                .diary-card > div:first-child {
+                    border-bottom: 1px solid #f1f5f9 !important;
+                    padding-bottom: 8px !important;
+                    margin-bottom: 12px !important;
+                }
+                
+                .diary-card > div:first-child,
+                .diary-card > div:first-child > div,
+                .diary-card > div:first-child > div > div {
+                    display: flex !important;
+                    flex-direction: row !important;
+                    flex-wrap: nowrap !important;
+                    align-items: center !important;
+                    justify-content: flex-start !important;
+                    white-space: nowrap !important;
+                }
 
-            window.addEventListener('afterprint', cleanupPrintContainer);
-            
-            // レンダリングの余裕を確保する
+                /* 幅不足による押し出し改行を防ぐため、中身のサイズを確保 */
+                .diary-card > div:first-child > div > div {
+                    min-width: max-content !important;
+                    width: max-content !important;
+                    gap: 8px !important;
+                }
+
+                /* 天気アイコンのコンテナ */
+                .diary-card > div:first-child .flex-shrink-0 {
+                    display: inline-flex !important;
+                    align-items: center !important;
+                }
+
+                /* 万が一テキスト形式の日付が連続してくっつく場合の隙間を確保 */
+                .diary-card span + span {
+                    margin-left: 8px !important;
+                }
+
+                /* 天気アイコンの非表示を解除し、印刷時も正しく表示する設定 */
+                span[class*="weather-"] {
+                    display: inline-flex !important;
+                    align-items: center !important;
+                    gap: 4px !important;
+                }
+                
+                /* 本文テキストエリア */
+                .prose { 
+                    font-size: 14px !important; 
+                    line-height: 1.8 !important; 
+                    color: #1e293b !important;
+                    margin-top: 12px !important; 
+                    margin-bottom: 12px !important;
+                    display: block !important;
+                    white-space: pre-wrap !important;
+                }
+                
+                /* タグリストの横並び調整 */
+                .flex.flex-wrap {
+                    display: flex !important;
+                    flex-wrap: wrap !important;
+                    gap: 6px !important;
+                    margin-top: 8px !important;
+                }
+                .flex.flex-wrap span {
+                    background: #f1f5f9 !important;
+                    color: #475569 !important;
+                    padding: 2px 8px !important;
+                    border-radius: 4px !important;
+                    font-size: 11px !important;
+                }
+
+                /* 画像エリア（画像だけ出力する場合もここが独立） */
+                .grid { 
+                    display: flex !important; 
+                    flex-wrap: wrap !important; 
+                    gap: 12px !important; 
+                    margin-top: 12px !important;
+                }
+                
+                /* 画像コンテナ：横に余計な文字が漏れないように隠蔽・独立化 */
+                .silver-ratio-container, .media-item-container { 
+                    display: flex !important; 
+                    align-items: center !important; 
+                    justify-content: center !important; 
+                    background: #f8fafc !important; 
+                    border: 1px solid #e2e8f0 !important;
+                    border-radius: 8px !important; 
+                    overflow: hidden !important;
+                    width: 48% !important; /* 2段組で綺麗に並ぶように調整 */
+                    min-width: 240px !important;
+                    aspect-ratio: 1.414 / 1 !important;
+                    position: relative !important;
+                }
+                
+                .silver-ratio-container img, .media-item-container img { 
+                    object-fit: contain !important; 
+                    width: 100% !important; 
+                    height: 100% !important; 
+                }
+
+                /* 画像だけの出力時などに発生する「余計な文字・ボタン・チェックボックス」を完全削除 */
+                .export-checkbox-container, 
+                .export-checkbox, 
+                button, 
+                .no-print,
+                input[type="checkbox"] { 
+                    display: none !important; 
+                    width: 0 !important; 
+                    height: 0 !important; 
+                    opacity: 0 !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                }
+                
+               /* FontAwesomeなどのWebアイコンフォント単体は非表示（ただし天気アイコンは除外して表示させる） */
+                i.fa-solid:not([class*="fa-weather"]):not(.fa-sun):not(.fa-cloud):not(.fa-cloud-showers-heavy):not(.fa-snowflake):not(.fa-umbrella), 
+                i.fa-regular:not([class*="fa-weather"]), 
+                i.fa-brands { 
+                    display: none !important; 
+                } 
+                /* 天気アイコン用のフォントを印刷時も強制的に表示し、色を正確に出力 */
+                i[class*="weather-"], span[class*="weather-"] i, i.fa-sun, i.fa-cloud, i.fa-cloud-showers-heavy, i.fa-snowflake, i.fa-umbrella, .fas, .far {
+                    display: inline-block !important;
+                    visibility: visible !important;
+                    -webkit-print-color-adjust: exact !important;
+                    print-color-adjust: exact !important; /* ブラウザが勝手に色を消すのを防ぐ */
+                }
+
+                /* テキストのカラーを強制統一 */
+                h1, h2, h3, h4, p {
+                    color: #1e293b !important;
+                }
+                /* アイコンの色までグレーに上書きされないよう、.text-xs を除外 */
+                .text-slate-400, .text-slate-500 { 
+                    color: #64748b !important; 
+                }
+                
+                /* 天気アイコンの色を明示的に指定して確実に反映させる */
+                .text-amber-500 { color: #f59e0b !important; }
+                .text-blue-400 { color: #60a5fa !important; }
+                .text-indigo-400 { color: #818cf8 !important; }
+            </style>
+        </head>
+        <body>
+            ${tempContainer.innerHTML}
+        </body>
+        </html>
+    `);
+    frameDoc.close();
+
+    // 5. データ適用完了を待って印刷画面を起動
+    setTimeout(() => {
+        try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+        } catch (e) {
+            console.error(e);
+            showToast("印刷に失敗しました");
+        } finally {
+            // 印刷後は不要なIframeを削除
             setTimeout(() => {
-                // 強制的に再レイアウトを促す
-                printContainer.style.display = 'block'; 
-                
-                window.print(); 
-                
-                setTimeout(cleanupPrintContainer, 15000);
-            }, 1000); 
-
-        }, 2000); 
-        
-    }, 500); 
+                if (iframe.parentNode) {
+                    iframe.parentNode.removeChild(iframe);
+                }
+            }, 1000);
+        }
+    }, 800);
 }
 async function exportOriginalMedia() {
     const targets = getTargetsForExport(); 
