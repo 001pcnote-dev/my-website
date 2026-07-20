@@ -3140,7 +3140,11 @@ function exportData(type) {
     return md;
 }).join('---\n\n');
     
-    const blob = new Blob([content], { type: type === 'json' ? 'application/json' : 'text/markdown' }); 
+    // Markdownの文字化け対策：先頭にBOM（目印）を追加
+    const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+    const blobData = type === 'json' ? [content] : [bom, content];
+    const blob = new Blob(blobData, { type: type === 'json' ? 'application/json' : 'text/markdown' }); 
+    
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); 
     a.download = `SmartDiary_Export_${dateStr}.${type === 'json' ? 'json' : 'md'}`;
@@ -3259,12 +3263,15 @@ function exportPDF() {
             printContainer.style.visibility = '';
             printContainer.style.display = ''; 
             
-            // 印刷実行
-            window.print(); 
-            
-            // 【修正箇所】 Android等で window.print() が非同期動作し、ダイアログ表示前にDOMが消える問題への対策
-            // フォールバックの時間を十分に長く（500ms → 15000ms）する
-            setTimeout(cleanupPrintContainer, 15000);
+            // Androidで白紙になる対策：スタイル解除後、ブラウザが画面を描画するのを少し待ってから印刷を実行する
+            setTimeout(() => {
+                // 印刷実行
+                window.print(); 
+                
+                // 【修正箇所】 Android等で window.print() が非同期動作し、ダイアログ表示前にDOMが消える問題への対策
+                // フォールバックの時間を十分に長く（500ms → 15000ms）する
+                setTimeout(cleanupPrintContainer, 15000);
+            }, 300); // 300ミリ秒待機して確実に出力させる
 
         }, 800); 
         
