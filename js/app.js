@@ -213,33 +213,33 @@ function showCalendarPopup(items, cellElement) {
 
     const popupWidth = popup.offsetWidth;
     const screenWidth = window.innerWidth;
-        const margin = 12;
+    const margin = 12;
 
-        let popupLeft = cellCenterX;
+    let popupLeft = cellCenterX;
 
-        // はみ出しを防ぐため、一番左・一番右の限界値を設定
-        const minLeft = popupWidth / 2 + margin;
-        const maxLeft = screenWidth - popupWidth / 2 - margin;
+    // はみ出しを防ぐため、一番左・一番右の限界値を設定
+    const minLeft = popupWidth / 2 + margin;
+    const maxLeft = screenWidth - popupWidth / 2 - margin;
 
-        if (popupLeft < minLeft) {
-            popupLeft = minLeft;
-        } else if (popupLeft > maxLeft) {
-            popupLeft = maxLeft;
-        }
+    if (popupLeft < minLeft) {
+        popupLeft = minLeft;
+    } else if (popupLeft > maxLeft) {
+        popupLeft = maxLeft;
+    }
 
-        popup.style.left = popupLeft + 'px';
-        popup.style.top = (rect.top - 10) + 'px';
+    popup.style.left = popupLeft + 'px';
+    popup.style.top = (rect.top - 10) + 'px';
 
-        const arrow = popup.lastElementChild;
-        if (arrow) {
-            const offset = cellCenterX - popupLeft;
-            // 矢印が吹き出しの枠外（角の部分）に飛び出さないよう、動ける範囲を制限
-            const maxOffset = (popupWidth / 2) - 16;
-            const safeOffset = Math.max(-maxOffset, Math.min(offset, maxOffset));
-            arrow.style.left = `calc(50% + ${safeOffset}px)`;
-        }
+    const arrow = popup.lastElementChild;
+    if (arrow) {
+        const offset = cellCenterX - popupLeft;
+        // 矢印が吹き出しの枠外（角の部分）に飛び出さないよう、動ける範囲を制限
+        const maxOffset = (popupWidth / 2) - 16;
+        const safeOffset = Math.max(-maxOffset, Math.min(offset, maxOffset));
+        arrow.style.left = `calc(50% + ${safeOffset}px)`;
+    }
 
-        setTimeout(() => popup.classList.remove('opacity-0'), 10);
+    setTimeout(() => popup.classList.remove('opacity-0'), 10);
 }
 
 function hideCalendarPopup() {
@@ -324,7 +324,6 @@ function getAllImagesFromItem(item) {
     });
     return images;
 }
-
 // ==========================================
 // 4. File System Access API & フォルダ同期
 // ==========================================
@@ -577,26 +576,27 @@ async function handleEntryContentInput(textarea) {
         }
     }
 }
+
 window.addEventListener('scroll', () => {
     const currentScrollY = window.scrollY;
     const header = document.getElementById('main-header');
     const filterArea = document.getElementById('search-filter-area');
     
     if (viewMode === 'album') {
-            if (isAlbumHeaderVisible && Math.abs(currentScrollY - lastScrollY) > 5) {
-                isAlbumHeaderVisible = false;
-                if (header) {
-                    header.classList.add('header-hidden');
-                    clearTimeout(headerHideTimeout);
-                    headerHideTimeout = setTimeout(() => header?.classList.add('hidden'), 300);
-                }
-                if (filterArea) {
-                    filterArea.classList.add('filter-hidden');
-                    clearTimeout(filterHideTimeout);
-                    filterHideTimeout = setTimeout(() => filterArea?.classList.add('hidden'), 300);
-                }
-                document.body.classList.remove('pt-14');
-                const albumToggleBtn = document.getElementById('album-header-toggle-btn');
+        if (isAlbumHeaderVisible && Math.abs(currentScrollY - lastScrollY) > 5) {
+            isAlbumHeaderVisible = false;
+            if (header) {
+                header.classList.add('header-hidden');
+                clearTimeout(headerHideTimeout);
+                headerHideTimeout = setTimeout(() => header?.classList.add('hidden'), 300);
+            }
+            if (filterArea) {
+                filterArea.classList.add('filter-hidden');
+                clearTimeout(filterHideTimeout);
+                filterHideTimeout = setTimeout(() => filterArea?.classList.add('hidden'), 300);
+            }
+            document.body.classList.remove('pt-14');
+            const albumToggleBtn = document.getElementById('album-header-toggle-btn');
             if (albumToggleBtn) albumToggleBtn.innerHTML = '<i class="fa-solid fa-angle-down"></i>';
         }
     } else {
@@ -617,7 +617,7 @@ window.addEventListener('scroll', () => {
             filterArea?.classList.remove('filter-hidden', 'hidden');
         }
     }
-        lastScrollY = currentScrollY;
+    lastScrollY = currentScrollY;
 
     if ((viewMode === 'list' || viewMode === 'album') && (window.innerHeight + currentScrollY) >= document.documentElement.scrollHeight - 300) {
         if (currentDisplayLimit < currentFilteredItems.length) {
@@ -641,7 +641,6 @@ window.addEventListener('scroll', () => {
         }
     }
 });
-
 // ======= UI・表示系関数 =======
 function initTheme() {
     const savedTheme = appSettings.get('theme');
@@ -1063,7 +1062,6 @@ async function loadDiaryFromFolder() {
     updateTagFilterOptions();
     if (typeof setViewMode === 'function') setViewMode(viewMode);
 }
-
 function renderMediaPreview() {
     const previewContainer = document.getElementById('media-preview-container');
     previewContainer.innerHTML = '';
@@ -1846,6 +1844,7 @@ function setupLongPress() {
         btn.addEventListener('mouseleave', cancelPress);
     });
 }
+
 function setupViewMenuLongPress() {
     const btn = document.getElementById('view-menu-btn'); 
     if (!btn) return;
@@ -1939,7 +1938,8 @@ function createCardElement(item, isSearching) {
     let updateInfo = '';
     if (item.updatedAt) {
         const upDate = new Date(item.updatedAt).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        updateInfo = `<span class="text-[10px] text-slate-400 font-normal ml-2 tracking-normal" title="最終更新"><i class="fa-solid fa-clock-rotate-left mr-1"></i>${upDate}</span>`;
+        // ml-3 (余白) を追加し、span を独立配置
+        updateInfo = `<span class="text-[10px] text-slate-400 font-normal ml-3 tracking-normal inline-block" title="最終更新"><i class="fa-solid fa-clock-rotate-left mr-1"></i>${upDate}</span>`;
     }
     
     const card = document.createElement('div');
@@ -1969,7 +1969,7 @@ function createCardElement(item, isSearching) {
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 dark:border-slate-700 pb-2 mb-2.5 gap-2">
             <div class="flex items-center justify-between sm:justify-start sm:space-x-2.5 min-w-0 w-full sm:w-auto">
                 <div class="flex items-center space-x-2 min-w-0">
-                    <span class="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-tight whitespace-nowrap">${formattedDate}${updateInfo}</span>
+                    <span class="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-tight whitespace-nowrap">${formattedDate}</span>${updateInfo}
                     <div class="flex-shrink-0">${weatherIconHtml}</div>
                 </div>
                 <div class="export-checkbox-container no-print sm:hidden flex items-center">
@@ -1993,7 +1993,6 @@ function createCardElement(item, isSearching) {
     `;
     return card;
 }
-
 function checkIsSearching() {
     return (
         document.getElementById('search-input').value.trim() !== '' || 
@@ -2974,27 +2973,6 @@ async function navigateLightbox(direction, event) {
     }
 }
 
-function closeLightbox() {
-    const lightbox = document.getElementById('lightbox-modal');
-    const video = document.getElementById('lightbox-video');
-    if (video) {
-        video.pause();
-        video.removeAttribute('src'); 
-        video.load();                 
-    }
-    lightbox.classList.remove('opacity-100');
-    setTimeout(() => lightbox.classList.add('hidden'), 300);
-}
-
-function toggleImageZoom(e) {
-    if (e) e.stopPropagation();
-    const img = document.getElementById('lightbox-img');
-    isOriginalSize = !isOriginalSize;
-    
-    img.className = isOriginalSize ? "w-auto h-auto max-w-none max-h-none cursor-zoom-out transition-all duration-300 transform" : "max-w-full max-h-[90vh] rounded-lg shadow-2xl object-contain transition-all duration-300 transform cursor-zoom-in";
-    document.getElementById('zoom-indicator').innerHTML = isOriginalSize ? '<i class="fa-solid fa-magnifying-glass-minus"></i> 原寸大' : '<i class="fa-solid fa-magnifying-glass-plus"></i> フィット';
-}
-
 function openAutotagModal() {
     const modal = document.getElementById('autotag-modal');
     if (!modal) return;
@@ -3077,7 +3055,6 @@ function toggleSettings() {
         setTimeout(() => modal.classList.add('hidden'), 300); 
     }
 }
-
 function getTargetsForExport() { 
     const targets = []; 
     const hasDiaryCheck = globalSelectedIds.size > 0;
@@ -3116,38 +3093,38 @@ function exportData(type) {
     const dateStr = new Date().toISOString().split('T')[0];
     
     const content = type === 'json' ? JSON.stringify(targets, null, 2) : targets.map(i => {
-    const displayDate = i.date ? i.date.replace('T', ' ') : (i.date || '');
-    let md = `## ${displayDate}\n\n`;
-    
-    const weatherVal = i.weather ? String(i.weather).toLowerCase().trim() : '';
-    if (weatherVal && weatherConfig[weatherVal]) {
-        md += `**天気**: ${weatherConfig[weatherVal].label}\n\n`;
-    } else if (i.weather) {
-        md += `**天気**: ${i.weather}\n\n`;
-    }
-    
-    if (i.content) md += `${i.content}\n\n`;
-    
-    const images = getAllImagesFromItem(i);
-    images.forEach(img => {
-        const fileRelPath = img.isOriginal ? `originals/${img.originalName}` : (img.mediaName ? `media/${img.mediaName}` : img.src);
-
-        if (img.isVideo) {
-            md += `[動画ファイル](${fileRelPath})\n\n`;
-        } else {
-            if (img.isOriginal) {
-                md += `<img src="${fileRelPath}" alt="画像" style="max-width:100%; height:auto;" />\n\n`;
-            } else {
-                md += `![](${fileRelPath})\n\n`; 
-            }
+        const displayDate = i.date ? i.date.replace('T', ' ') : (i.date || '');
+        let md = `## ${displayDate}\n\n`;
+        
+        const weatherVal = i.weather ? String(i.weather).toLowerCase().trim() : '';
+        if (weatherVal && weatherConfig[weatherVal]) {
+            md += `**天気**: ${weatherConfig[weatherVal].label}\n\n`;
+        } else if (i.weather) {
+            md += `**天気**: ${i.weather}\n\n`;
         }
-    });
-    
-    if (i.tags && i.tags.length > 0) {
-        md += `${i.tags.map(tag => `#${tag}`).join(' ')}\n\n`;
-    } 
-    return md;
-}).join('---\n\n');
+        
+        if (i.content) md += `${i.content}\n\n`;
+        
+        const images = getAllImagesFromItem(i);
+        images.forEach(img => {
+            const fileRelPath = img.isOriginal ? `originals/${img.originalName}` : (img.mediaName ? `media/${img.mediaName}` : img.src);
+
+            if (img.isVideo) {
+                md += `[動画ファイル](${fileRelPath})\n\n`;
+            } else {
+                if (img.isOriginal) {
+                    md += `<img src="${fileRelPath}" alt="画像" style="max-width:100%; height:auto;" />\n\n`;
+                } else {
+                    md += `![](${fileRelPath})\n\n`; 
+                }
+            }
+        });
+        
+        if (i.tags && i.tags.length > 0) {
+            md += `${i.tags.map(tag => `#${tag}`).join(' ')}\n\n`;
+        } 
+        return md;
+    }).join('---\n\n');
     
     // Markdownの文字化け対策：先頭にBOM（目印）を追加
     const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
@@ -3184,11 +3161,15 @@ async function exportPDF() {
         
         let printItem = { ...item };
         
-        // 追加：日付データに含まれる「T」を半角スペースに置換し、日付と時間を離す
+        // 日付データに含まれる「T」を半角スペースに置換
         if (printItem.date && typeof printItem.date === 'string') {
             printItem.date = printItem.date.replace('T', ' ');
         }
+        if (printItem.updatedAt && typeof printItem.updatedAt === 'string') {
+            printItem.updatedAt = printItem.updatedAt.replace('T', ' ');
+        }
         
+        // 画像のみ選択時は本文・タグ・更新日時のみクリア（weatherは保持）
         if ((hasDiaryCheck || hasImageCheck) && !isDiaryChecked && hasSpecificImages) {
             printItem.content = "";
             printItem.tags = [];
@@ -3198,7 +3179,7 @@ async function exportPDF() {
         // メモリ上のコンテナに要素を追加
         tempContainer.appendChild(createCardElement(printItem, true)); 
     });
-    
+
     // 2. 非同期で画像（Base64）を適用
     const mediaElements = tempContainer.querySelectorAll('[data-pending-media]');
     for (const el of mediaElements) {
@@ -3297,17 +3278,13 @@ async function exportPDF() {
                 }
 
                 /* 万が一テキスト形式の日付が連続してくっつく場合の隙間を確保 */
-                .diary-card span + span {
+                .diary-card span + span,
+                .diary-card time + time,
+                .diary-card time + span,
+                .diary-card span + time {
                     margin-left: 8px !important;
                 }
 
-                /* 天気アイコンの非表示を解除し、印刷時も正しく表示する設定 */
-                span[class*="weather-"] {
-                    display: inline-flex !important;
-                    align-items: center !important;
-                    gap: 4px !important;
-                }
-                
                 /* 本文テキストエリア */
                 .prose { 
                     font-size: 14px !important; 
@@ -3377,25 +3354,25 @@ async function exportPDF() {
                     padding: 0 !important;
                 }
                 
-               /* FontAwesomeなどのWebアイコンフォント単体は非表示（ただし天気アイコンは除外して表示させる） */
-                i.fa-solid:not([class*="fa-weather"]):not(.fa-sun):not(.fa-cloud):not(.fa-cloud-showers-heavy):not(.fa-snowflake):not(.fa-umbrella), 
-                i.fa-regular:not([class*="fa-weather"]), 
-                i.fa-brands { 
-                    display: none !important; 
-                } 
+                /* ソートボタン・アクションボタン類のみ非表示 */
+                .sort-buttons-container {
+                    display: none !important;
+                }
+
                 /* 天気アイコン用のフォントを印刷時も強制的に表示し、色を正確に出力 */
-                i[class*="weather-"], span[class*="weather-"] i, i.fa-sun, i.fa-cloud, i.fa-cloud-showers-heavy, i.fa-snowflake, i.fa-umbrella, .fas, .far {
+                .flex-shrink-0 i.fa-solid,
+                .flex-shrink-0 i,
+                i[class*="fa-"] {
                     display: inline-block !important;
                     visibility: visible !important;
                     -webkit-print-color-adjust: exact !important;
-                    print-color-adjust: exact !important; /* ブラウザが勝手に色を消すのを防ぐ */
+                    print-color-adjust: exact !important;
                 }
 
                 /* テキストのカラーを強制統一 */
                 h1, h2, h3, h4, p {
                     color: #1e293b !important;
                 }
-                /* アイコンの色までグレーに上書きされないよう、.text-xs を除外 */
                 .text-slate-400, .text-slate-500 { 
                     color: #64748b !important; 
                 }
@@ -3431,6 +3408,7 @@ async function exportPDF() {
         }
     }, 800);
 }
+
 async function exportOriginalMedia() {
     const targets = getTargetsForExport(); 
     let targetImages = [];
@@ -3794,13 +3772,15 @@ function closeLightbox() {
         toggleImageZoom();
     }
     
+    lightbox.classList.remove('opacity-100');
     lightbox.classList.add('opacity-0');
     setTimeout(() => {
         lightbox.classList.add('hidden');
         const video = document.getElementById('lightbox-video');
         if (video) {
             video.pause();
-            video.src = '';
+            video.removeAttribute('src'); 
+            video.load();
         }
     }, 300);
 }
