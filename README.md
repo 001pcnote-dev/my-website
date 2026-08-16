@@ -1,4 +1,3 @@
 # my-website
-## smartdiary20260722
+## smatdiaryBase64完全廃止20260814
 ## モジュール化済み
-## PDF出力修正
