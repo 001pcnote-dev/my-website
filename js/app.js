@@ -43,7 +43,6 @@ let searchDebounceTimeout = null;
 
 function debouncedFilter() {
     clearTimeout(searchDebounceTimeout);
-    // 300ミリ秒入力がなければ filterDiaryItems() を実行
     searchDebounceTimeout = setTimeout(() => {
         filterDiaryItems();
     }, 300);
@@ -103,47 +102,31 @@ const weatherConfig = {
 };
 
 // ==========================================
-// 3. メモリ管理 (Blob URL)
+// 3. メモリ管理 (Blob URL & キャッシュ)
 // ==========================================
 const mediaUrlCache = new Map();
 
-function base64ToBlob(base64, type) {
-    const base64Data = base64.includes(',') ? base64.split(',')[1] : base64;
-    const bin = atob(base64Data);
-    const chunkSize = 1024 * 10; // データを10KBずつ小分けにして処理
-    const byteArrays = [];
-
-    for (let offset = 0; offset < bin.length; offset += chunkSize) {
-        const chunk = bin.slice(offset, offset + chunkSize);
-        const bytes = new Uint8Array(chunk.length);
-        for (let i = 0; i < chunk.length; i++) {
-            bytes[i] = chunk.charCodeAt(i);
-        }
-        byteArrays.push(bytes);
-    }
-    return new Blob(byteArrays, { type: type });
-}
-
 async function loadMediaUrl(mediaName) {
-    if (!mediaName || !dirHandle) return '';
+    if (!mediaName) return '';
     if (mediaUrlCache.has(mediaName)) return mediaUrlCache.get(mediaName);
+    if (!dirHandle) return '';
+
     try {
-        const mediaDir = await dirHandle.getDirectoryHandle('media');
-        const fileHandle = await mediaDir.getFileHandle(mediaName);
+        let fileHandle = null;
+        try {
+            const mediaDir = await dirHandle.getDirectoryHandle('media');
+            fileHandle = await mediaDir.getFileHandle(mediaName);
+        } catch (e) {
+            const origDir = await dirHandle.getDirectoryHandle('originals');
+            fileHandle = await origDir.getFileHandle(mediaName);
+        }
+
+        if (!fileHandle) return '';
         const file = await fileHandle.getFile();
-        
-        // 修正: AndroidのpdfPDF出力で白紙になるのを防ぐため、Data URL（Base64）に変換して読み込む
-        const url = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-        
+        const url = URL.createObjectURL(file);
         mediaUrlCache.set(mediaName, url);
         return url;
     } catch (e) {
-        // 天気アイコン（fa-sun等）などのファイルが存在しないメディア名ではない場合は空文字を返す
         if (mediaName.startsWith('fa-') || mediaName === 'sunny' || mediaName === 'cloudy' || mediaName === 'rainy' || mediaName === 'snowy') {
             return mediaName;
         }
@@ -166,9 +149,14 @@ async function applyMediaUrls() {
     }
 }
 
-// キャッシュ済みの不要なメディアURLを解放し、メモリリークを防止
 function clearMediaUrlCache() {
-    // 修正: Data URLに変更したため、revokeObjectURLによるURLの破棄は不要になり、単にキャッシュを空にするだけで済みます
+    for (const url of mediaUrlCache.values()) {
+        if (url && typeof url === 'string' && url.startsWith('blob:')) {
+            try {
+                URL.revokeObjectURL(url);
+            } catch (e) {}
+        }
+    }
     mediaUrlCache.clear();
 }
 
@@ -181,7 +169,6 @@ function showCalendarPopup(items, cellElement) {
         const d = getSafeDate(item.date);
         const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
         
-        // 記号が崩れないよう、先に安全化処理をしてから文字を切り取る
         let safeContent = item.content ? DOMPurify.sanitize(item.content, { ALLOWED_TAGS: [] }) : '内容なし';
         let text = safeContent.substring(0, 40) + (safeContent.length > 40 ? '...' : '');
 
@@ -216,8 +203,6 @@ function showCalendarPopup(items, cellElement) {
     const margin = 12;
 
     let popupLeft = cellCenterX;
-
-    // はみ出しを防ぐため、一番左・一番右の限界値を設定
     const minLeft = popupWidth / 2 + margin;
     const maxLeft = screenWidth - popupWidth / 2 - margin;
 
@@ -233,7 +218,6 @@ function showCalendarPopup(items, cellElement) {
     const arrow = popup.lastElementChild;
     if (arrow) {
         const offset = cellCenterX - popupLeft;
-        // 矢印が吹き出しの枠外（角の部分）に飛び出さないよう、動ける範囲を制限
         const maxOffset = (popupWidth / 2) - 16;
         const safeOffset = Math.max(-maxOffset, Math.min(offset, maxOffset));
         arrow.style.left = `calc(50% + ${safeOffset}px)`;
@@ -294,7 +278,8 @@ function getSafeDate(dateStr) {
     if (!dateStr) return new Date(0);
     const parsed = new Date(dateStr);
     if (!isNaN(parsed.getTime())) return parsed;
-    return new Date(dateStr.replace(/-/g, '/').replace(/T/g, ' '));
+    const baseDateStr = dateStr.replace(/(Z|[+-]\d{2}:\d{2})$/, '');
+    return new Date(baseDateStr.replace(/-/g, '/').replace(/T/g, ' '));
 }
 
 function getAllImagesFromItem(item) {
@@ -304,15 +289,14 @@ function getAllImagesFromItem(item) {
 
     mFiles.forEach((m) => {
         const isVideo = m.type?.startsWith('video/');
-        const oldBase64 = isVideo ? m.thumbnail : m.data;
-        const srcValue = m.mediaName ? '' : (oldBase64 || '');
-        const pendingAttr = m.mediaName ? `data-pending-media="${m.mediaName}"` : '';
+        const mediaIdentifier = m.mediaName || m.originalName || '';
+        const pendingAttr = mediaIdentifier ? `data-pending-media="${mediaIdentifier}"` : '';
 
         images.push({
             id: `${item.id}-media-${idx}`,
-            src: srcValue,
+            src: '',
             pendingAttr: pendingAttr,
-            mediaName: m.mediaName,
+            mediaName: m.mediaName || '',
             name: m.originalName || (isVideo ? `video_${idx}` : `image_${idx}`),
             isOriginal: !!m.originalName,
             originalName: m.originalName,
@@ -324,16 +308,14 @@ function getAllImagesFromItem(item) {
     });
     return images;
 }
+
 // ==========================================
 // 4. File System Access API & フォルダ同期
 // ==========================================
 document.addEventListener('DOMContentLoaded', async () => {
-    // 初期表示時のテーマ切り替えによる画面のチラつき（白点滅）を防ぐため、アニメーションを一時無効化
     document.body.classList.remove('transition-colors', 'duration-300');
 
     await appDB.init();
-
-    // 初期のキャッシュ設定を読み込み
     await appSettings.loadSettings();
 
     initTheme();
@@ -378,32 +360,25 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await checkAndShowStartupSync();
 
-    // 全ての初期化が完了した後、安全にアニメーションを再有効化
     setTimeout(() => {
         document.body.classList.add('transition-colors', 'duration-300');
     }, 50);
 });
 
-// 共通のフォルダセットアップ処理
 async function setupFolder(handle) {
     dirHandle = handle;
     
-    // 1. メモリ上のデータを一度リセット（重要）
     diaryItems = [];
-    clearMediaUrlCache(); // 古い画像のキャッシュを解放してメモリを節約
+    clearMediaUrlCache();
     
-    // 2. フォルダ構造の確保
     await dirHandle.getDirectoryHandle('originals', { create: true });
     await dirHandle.getDirectoryHandle('media', { create: true });
     
-    // 3. フォルダからデータを読み込み
     await loadDiaryFromFolder();
     
-    // 4. 表示の更新
     renderDiaryItems();
     updateTagFilterOptions();
     
-    // 5. DBを最新状態に同期
     await appDB.clear('diary_items');
     for (const item of diaryItems) {
         await appDB.put('diary_items', item);
@@ -423,12 +398,10 @@ async function checkAndShowStartupSync() {
 
     if (storedHandle) {
         try {
-            // 既に許可されているかチェック
             if ((await storedHandle.queryPermission({ mode: 'readwrite' })) === 'granted') {
                 await setupFolder(storedHandle);
                 return;
             } else {
-                // 許可が必要な場合、UIを「再接続モード」に書き換えて表示
                 modal.querySelector('h3').textContent = '前回のフォルダに再接続';
                 modal.querySelector('p').innerHTML = '前回の保存先フォルダが記憶されています。<br>再接続して同期を再開しますか？';
                 modal.querySelector('.flex.flex-col.gap-3').innerHTML = `
@@ -450,7 +423,6 @@ async function checkAndShowStartupSync() {
         }
     }
     
-    // 初回または記憶がない場合の通常UI
     if (modal) {
         modal.querySelector('h3').textContent = '保存先フォルダを同期';
         modal.querySelector('p').innerHTML = '日記のデータや画像ファイルを保存するフォルダを選択してください。<br><span class="text-xs">※同期しなくてもローカルで利用可能です</span>';
@@ -470,46 +442,38 @@ function showSyncModal(modal) {
     animateModal(modal, true);
 }
 
-let isFolderSyncing = false; // 処理の重複実行を防ぐための目印（ロック）
+let isFolderSyncing = false;
 
-// フォルダを選択し直さずに1クリックで再接続する処理
 async function reconnectPreviousFolder() {
-    if (isFolderSyncing) return; // 既に処理中なら何もしない
+    if (isFolderSyncing) return;
     isFolderSyncing = true;
     
     try {
         const storedHandle = await appDB.get('system_state', 'dirHandle');
         if (storedHandle) {
-            // ボタンを押したら、ブラウザの許可画面が出る前にすぐモーダルを閉じる
             closeStartupSyncModal();
-
-            // ブラウザの許可プロンプトを呼び出す
             if ((await storedHandle.requestPermission({ mode: 'readwrite' })) === 'granted') {
                 showToast("前回のフォルダに再接続中...");
-                
                 await setupFolder(storedHandle);
-                
                 showToast("前回のフォルダに再接続しました");
                 return;
             } else {
-                // ユーザーが許可を拒否した場合は、安全に処理を終了する
                 showToast("再接続がキャンセルされました");
                 return; 
             }
         }
-        // 保存情報がない場合のみフォールバック
         await handleStartupSync();
     } catch (err) {
         console.error("再接続エラー:", err);
         showToast("再接続に失敗しました");
         return;
     } finally {
-        isFolderSyncing = false; // 処理が完了、またはエラーになったら確実にロックを解除
+        isFolderSyncing = false;
     }
 }
 
 async function handleStartupSync() {
-    if (isFolderSyncing) return; // 既に処理中なら何もしない
+    if (isFolderSyncing) return;
     isFolderSyncing = true;
     
     try {
@@ -517,16 +481,12 @@ async function handleStartupSync() {
             throw new Error("File System Access API is not supported on this browser.");
         }
         
-        // フォルダ選択画面が出る前にすぐモーダルを閉じる
         closeStartupSyncModal();
-
         const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
         
         showToast("フォルダの同期を開始します...");
-        
         await appDB.set('system_state', 'dirHandle', handle);
         await setupFolder(handle);
-        
         showToast("フォルダの同期が完了しました");
     } catch (err) {
         console.error("handleStartupSync error:", err);
@@ -536,7 +496,7 @@ async function handleStartupSync() {
             showToast("フォルダの選択がキャンセルされました");
         }
     } finally {
-        isFolderSyncing = false; // 処理が完了、またはエラーになったら確実にロックを解除
+        isFolderSyncing = false;
     }
 }
 
@@ -631,16 +591,16 @@ window.addEventListener('scroll', () => {
                     container.appendChild(createCardElement(item, isSearching));
                 });
                 
-                // 追加した要素が画面に確実に描画されたのを確認してから画像を読み込むように修正
                 requestAnimationFrame(() => {
                     setTimeout(applyMediaUrls, 10);
                 });
             } else if (viewMode === 'album') {
-                renderAlbum(); // アルバムの続きを描画
+                renderAlbum();
             }
         }
     }
 });
+
 // ======= UI・表示系関数 =======
 function initTheme() {
     const savedTheme = appSettings.get('theme');
@@ -815,11 +775,25 @@ function sortDiaryItemsByDateData() {
     });
 }
 
+function cleanItemForStorage(item) {
+    const cleaned = { ...item };
+    if (cleaned.mediaFiles && Array.isArray(cleaned.mediaFiles)) {
+        cleaned.mediaFiles = cleaned.mediaFiles.map(m => ({
+            type: m.type,
+            originalName: m.originalName,
+            mediaName: m.mediaName,
+            metadata: m.metadata
+        }));
+    }
+    delete cleaned.media;
+    return cleaned;
+}
+
 async function saveLocally() { 
     try {
-        await appDB.set('system_state', 'smart_diary_backup', diaryItems);
+        const storageItems = diaryItems.map(cleanItemForStorage);
+        await appDB.set('system_state', 'smart_diary_backup', storageItems);
         
-        // --- 修正箇所：現在の配列にない古いID（ゴースト）をIndexedDBから確実に消去 ---
         const validIds = new Set(diaryItems.map(i => i.id));
         const cachedItems = await appDB.getAll('diary_items');
         if (cachedItems && cachedItems.length > 0) {
@@ -829,9 +803,8 @@ async function saveLocally() {
                 }
             }
         }
-        // -------------------------------------------------------------------------
         
-        for (const item of diaryItems) {
+        for (const item of storageItems) {
             await appDB.put('diary_items', item);
         }
     } catch (e) {
@@ -861,14 +834,36 @@ async function saveDiaryToFolder() {
             diaryItems.forEach(item => {
                 const year = getSafeDate(item.date).getFullYear() || 'unknown';
                 if (!yearlyData[year]) yearlyData[year] = [];
-                yearlyData[year].push(item);
+                yearlyData[year].push(cleanItemForStorage(item));
             });
 
             for (const year of Object.keys(yearlyData)) {
                 const fileName = `diary_data_${year}.json`;
                 const fileHandle = await dirHandle.getFileHandle(fileName, { create: true }); 
                 const writable = await fileHandle.createWritable(); 
-                await writable.write(JSON.stringify(yearlyData[year], null, 2)); 
+                
+                const exportData = {
+                    version: "1.0",
+                    exportedAt: new Date().toISOString(),
+                    diaries: yearlyData[year].map(item => {
+                        let formattedDate = item.date;
+                        if (item.date) {
+                            const d = getSafeDate(item.date);
+                            if (!isNaN(d.getTime())) {
+                                const pad = n => String(n).padStart(2, '0');
+                                const offset = -d.getTimezoneOffset();
+                                const sign = offset >= 0 ? '+' : '-';
+                                const absOffset = Math.abs(offset);
+                                formattedDate = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + 
+                                                pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + 
+                                                sign + pad(Math.floor(absOffset / 60)) + ':' + pad(absOffset % 60);
+                            }
+                        }
+                        return { ...item, date: formattedDate };
+                    })
+                };
+                
+                await writable.write(JSON.stringify(exportData, null, 2)); 
                 await writable.close(); 
             }
         } catch (e) {
@@ -1013,7 +1008,10 @@ async function loadDiaryFromFolder() {
                         if (text.trim().length > 0) {
                             const parsed = JSON.parse(text);
                             let items = [];
-                            if (!Array.isArray(parsed) && parsed.diaryItems) {
+                            
+                            if (parsed.version && parsed.diaries) {
+                                items = parsed.diaries;
+                            } else if (!Array.isArray(parsed) && parsed.diaryItems) {
                                 items = parsed.diaryItems;
                                 if (parsed.autotagRules) {
                                     await appSettings.set('smart_diary_autotag_rules', parsed.autotagRules);
@@ -1021,6 +1019,7 @@ async function loadDiaryFromFolder() {
                                 hasOldFormat = true;
                             } else {
                                 items = Array.isArray(parsed) ? parsed : [];
+                                hasOldFormat = true;
                             }
                             
                             return items.map(item => ({
@@ -1051,7 +1050,7 @@ async function loadDiaryFromFolder() {
             
             sortDiaryItemsByDateData();
             try {
-                await appDB.set('system_state', 'smart_diary_backup', diaryItems);
+                await appDB.set('system_state', 'smart_diary_backup', diaryItems.map(cleanItemForStorage));
             } catch(e) { console.error(e); }
         }
     } catch (e) {
@@ -1062,6 +1061,7 @@ async function loadDiaryFromFolder() {
     updateTagFilterOptions();
     if (typeof setViewMode === 'function') setViewMode(viewMode);
 }
+
 function renderMediaPreview() {
     const previewContainer = document.getElementById('media-preview-container');
     previewContainer.innerHTML = '';
@@ -1080,21 +1080,21 @@ function renderMediaPreview() {
     
     currentMediaFiles.forEach((media, index) => {
         let innerHtml = '';
-        const srcValue = media.mediaName ? '' : (media.data || media.thumbnail || '');
-        const pendingAttr = media.mediaName ? `data-pending-media="${media.mediaName}"` : '';
+        const mediaIdentifier = media.mediaName || media.originalName || '';
+        const pendingAttr = mediaIdentifier ? `data-pending-media="${mediaIdentifier}"` : '';
 
         if (media.type?.startsWith('image/')) { 
-            innerHtml = `<img src="${srcValue}" ${pendingAttr} class="w-full h-full object-contain pointer-events-none"/>`; 
+            innerHtml = `<img src="" ${pendingAttr} class="w-full h-full object-contain pointer-events-none"/>`; 
         } else if (media.type?.startsWith('video/')) { 
-            if (media.mediaName || media.thumbnail) {
-                innerHtml = `<img src="${srcValue}" ${pendingAttr} class="w-full h-full object-contain pointer-events-none"/><div class="absolute top-1 left-1 text-white bg-black/50 rounded px-1 text-[8px] pointer-events-none"><i class="fa-solid fa-video"></i></div>`;
+            if (mediaIdentifier) {
+                innerHtml = `<img src="" ${pendingAttr} class="w-full h-full object-contain pointer-events-none"/><div class="absolute top-1 left-1 text-white bg-black/50 rounded px-1 text-[8px] pointer-events-none"><i class="fa-solid fa-video"></i></div>`;
             } else {
                 innerHtml = `<i class="fa-solid fa-film text-3xl pointer-events-none"></i>`;
             }
         }
         
         const el = document.createElement('div');
-        el.className = `relative rounded-xl overflow-hidden aspect-square ${media.thumbnail || media.mediaName ? 'bg-slate-100' : 'bg-slate-900 text-white'} flex items-center justify-center group cursor-move`;
+        el.className = `relative rounded-xl overflow-hidden aspect-square ${media.mediaName || media.originalName ? 'bg-slate-100 dark:bg-slate-900' : 'bg-slate-900 text-white'} flex items-center justify-center group cursor-move`;
         el.draggable = true;
         el.dataset.index = index;
         el.innerHTML = `
@@ -1188,14 +1188,12 @@ function renderMediaPreview() {
 }
 
 async function removeSelectedMedia(index) {
-    // --- 修正箇所：単なるプレビュー配列からの削除だけでなく、フォルダ内の実体ファイルも削除する処理を追加 ---
     const mediaToDelete = currentMediaFiles[index];
     
     if (mediaToDelete && dirHandle) {
         if (!confirm('この画像を削除しますか？\n（元のフォルダからも完全に削除されます）')) return;
         
         try {
-            // originalsフォルダからの削除
             if (mediaToDelete.originalName) {
                 const originalsDir = await dirHandle.getDirectoryHandle('originals', { create: false }).catch(() => null);
                 if (originalsDir) {
@@ -1203,7 +1201,6 @@ async function removeSelectedMedia(index) {
                 }
             }
             
-            // mediaフォルダ(サムネイル等)からの削除
             if (mediaToDelete.mediaName) {
                 const mediaDir = await dirHandle.getDirectoryHandle('media', { create: false }).catch(() => null);
                 if (mediaDir) {
@@ -1216,27 +1213,22 @@ async function removeSelectedMedia(index) {
             showToast('画像ファイルの削除に失敗しました');
         }
     }
-    // -----------------------------------------------------------------------------------
 
     currentMediaFiles.splice(index, 1);
     renderMediaPreview();
 
-    // --- 修正箇所：保存ボタンを押さなくても、日記本体のデータから画像を即座に消去する ---
     const entryId = document.getElementById('entry-id')?.value;
     if (entryId) {
         const itemIndex = diaryItems.findIndex(i => i.id === entryId);
         if (itemIndex !== -1) {
-            // 日記データの上書きと即時保存
             diaryItems[itemIndex].mediaFiles = [...currentMediaFiles];
             saveLocally(); 
             
-            // 後ろに隠れている日記一覧画面からも、消した画像のサムネイルをすぐに消去する
             if (typeof renderDiaryItems === 'function') {
                 renderDiaryItems();
             }
         }
     }
-    // -----------------------------------------------------------------------------------
 }
 
 async function handleMediaSelect(event) {
@@ -1251,31 +1243,52 @@ async function handleMediaSelect(event) {
     previewContainer.classList.remove('hidden');
     
     let originalDir = null;
+    let mediaDir = null;
     if (dirHandle) {
         originalDir = await dirHandle.getDirectoryHandle('originals', { create: true });
+        mediaDir = await dirHandle.getDirectoryHandle('media', { create: true });
     }
     
     for (const file of files) {
-        // --- 修正箇所：ファイル名を「年月日_ランダム4文字_元の名前」に変更して自動ソート対応 ---
         const now = new Date();
         const dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
         const randomStr = Math.random().toString(36).substring(2, 6);
         const ext = file.name.includes('.') ? file.name.split('.').pop() : '';
         const nameWithoutExt = file.name.includes('.') ? file.name.substring(0, file.name.lastIndexOf('.')) : file.name;
         const originalName = `${dateStr}_${randomStr}_${nameWithoutExt}${ext ? '.' + ext : ''}`;
-        // -------------------------------------------------------------------------
+        const mediaName = `media_${dateStr}_${randomStr}.jpg`;
 
         const type = file.type;
         const metadata = await getMediaMetadata(file);
         let newMedia = null;
 
         if (type.startsWith('image/')) {
-            const compressedData = await compressImage(file); 
-            newMedia = { type, data: compressedData, originalName, metadata };
+            const compressedBlob = await compressImageToBlob(file); 
+            if (compressedBlob && mediaDir) {
+                try {
+                    const thumbHandle = await mediaDir.getFileHandle(mediaName, { create: true });
+                    const writable = await thumbHandle.createWritable();
+                    await writable.write(compressedBlob);
+                    await writable.close();
+                } catch(e) {
+                    console.warn("メディア圧縮保存エラー:", e);
+                }
+            }
+            newMedia = { type, originalName, mediaName, metadata };
             addTagAutomatically('Photo');
         } else if (type.startsWith('video/')) {
-            const thumbnail = await generateVideoThumbnail(file); 
-            newMedia = { type, thumbnail: thumbnail, originalName, metadata };
+            const thumbnailBlob = await generateVideoThumbnailToBlob(file); 
+            if (thumbnailBlob && mediaDir) {
+                try {
+                    const thumbHandle = await mediaDir.getFileHandle(mediaName, { create: true });
+                    const writable = await thumbHandle.createWritable();
+                    await writable.write(thumbnailBlob);
+                    await writable.close();
+                } catch(e) {
+                    console.warn("動画サムネイル保存エラー:", e);
+                }
+            }
+            newMedia = { type, originalName, mediaName, metadata };
             addTagAutomatically('Video');
         }
 
@@ -1288,7 +1301,7 @@ async function handleMediaSelect(event) {
                     await writable.write(file);
                     await writable.close();
                 } catch (e) {
-                    console.warn(e);
+                    console.warn("オリジナルファイル保存エラー:", e);
                 } 
             }
         }
@@ -1297,7 +1310,7 @@ async function handleMediaSelect(event) {
     event.target.value = ''; 
 }
 
-function compressImage(file, maxSize = 2560) {
+function compressImageToBlob(file, maxSize = 2560) {
     return new Promise((resolve) => {
         const img = new Image();
         const url = URL.createObjectURL(file); 
@@ -1323,18 +1336,58 @@ function compressImage(file, maxSize = 2560) {
             ctx.drawImage(img, 0, 0, width, height); 
             
             const mimeType = file.type === 'image/png' ? 'image/jpeg' : file.type;
-            const dataUrl = canvas.toDataURL(mimeType, 0.85);
-            
-            canvas.width = 0;
-            canvas.height = 0;
-            
-            resolve(dataUrl);
+            canvas.toBlob((blob) => {
+                canvas.width = 0;
+                canvas.height = 0;
+                resolve(blob);
+            }, mimeType, 0.85);
         }; 
         img.onerror = () => {
             URL.revokeObjectURL(url);
             resolve(null);
         };
         img.src = url;
+    });
+}
+
+async function generateVideoThumbnailToBlob(file) {
+    return new Promise((resolve) => {
+        const video = document.createElement('video'); 
+        const url = URL.createObjectURL(file); 
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = "auto"; 
+        
+        const cleanup = () => {
+            URL.revokeObjectURL(url);
+            video.removeAttribute('src');
+            video.load();
+        };
+        const timeoutId = setTimeout(() => { cleanup(); resolve(null); }, 8000);
+        
+        video.addEventListener('loadeddata', () => { video.currentTime = 0.1; });
+        video.addEventListener('seeked', () => {
+            clearTimeout(timeoutId);
+            try { 
+                const canvas = document.createElement('canvas'); 
+                const scale = Math.min(640 / (video.videoWidth || 640), 360 / (video.videoHeight || 360), 1); 
+                canvas.width = (video.videoWidth * scale) || 640; 
+                canvas.height = (video.videoHeight * scale) || 360; 
+                canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height); 
+                
+                canvas.toBlob((blob) => {
+                    canvas.width = 0;
+                    canvas.height = 0;
+                    cleanup(); 
+                    resolve(blob); 
+                }, 'image/jpeg', 0.6);
+            } catch (e) {
+                cleanup();
+                resolve(null);
+            }
+        }); 
+        video.src = url;
+        video.load(); 
     });
 }
 
@@ -1359,48 +1412,6 @@ async function openOriginal(fileName) {
     } catch (e) {
         alert("オリジナルファイルが見つからないか、読み込めませんでした。");
     }
-}
-
-async function generateVideoThumbnail(file) {
-    return new Promise((resolve) => {
-        const video = document.createElement('video'); 
-        const url = URL.createObjectURL(file); 
-        video.muted = true;
-        video.playsInline = true;
-        video.preload = "auto"; 
-        
-        const cleanup = () => {
-            URL.revokeObjectURL(url);
-            video.removeAttribute('src');
-            video.load();
-        };
-        const timeoutId = setTimeout(() => { cleanup(); resolve(null); }, 8000);
-        
-        video.addEventListener('loadeddata', () => { video.currentTime = 0.1; });
-        video.addEventListener('seeked', () => {
-            clearTimeout(timeoutId);
-            try { 
-                const canvas = document.createElement('canvas'); 
-                const scale = Math.min(640 / video.videoWidth, 360 / video.videoHeight, 1); 
-                canvas.width = (video.videoWidth * scale) || 640; 
-                canvas.height = (video.videoHeight * scale) || 360; 
-                canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height); 
-                
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-                
-                canvas.width = 0;
-                canvas.height = 0;
-                
-                cleanup(); 
-                resolve(dataUrl); 
-            } catch (e) {
-                cleanup();
-                resolve(null);
-            }
-        }); 
-        video.src = url;
-        video.load(); 
-    });
 }
 
 function getMediaMetadata(file) {
@@ -1452,7 +1463,6 @@ function getMediaMetadata(file) {
 
 async function saveDiaryItem() {
     const idInput = document.getElementById('entry-id').value;
-    const isNew = !idInput;
     const itemId = idInput || generateUniqueId();
     
     const contentVal = document.getElementById('entry-content').value;
@@ -1475,7 +1485,12 @@ async function saveDiaryItem() {
         content: contentVal,
         tags: document.getElementById('entry-tags').value.split(',').map(t => t.trim()).filter(Boolean),
         updatedAt: new Date().toISOString(),
-        mediaFiles: typeof currentMediaFiles !== 'undefined' ? currentMediaFiles : []
+        mediaFiles: typeof currentMediaFiles !== 'undefined' ? currentMediaFiles.map(m => ({
+            type: m.type,
+            originalName: m.originalName,
+            mediaName: m.mediaName,
+            metadata: m.metadata
+        })) : []
     };
 
     const existingIndex = diaryItems.findIndex(i => i.id === item.id);
@@ -1894,9 +1909,9 @@ function createCardElement(item, isSearching) {
             let html = `<div class="${wrapperClasses} relative media-item-container group" data-media-index="${index}">`;
             
             if (!img.isVideo) {
-                html += `<img src="${img.src}" ${img.pendingAttr} alt="Media" class="${imgClasses} cursor-zoom-in transition-transform duration-300" onclick="event.stopPropagation(); openLightboxFromCard('${item.id}', ${index})"/>${metaBadge} ${originalBtn}`;
+                html += `<img src="" ${img.pendingAttr} alt="Media" class="${imgClasses} cursor-zoom-in transition-transform duration-300" onclick="event.stopPropagation(); openLightboxFromCard('${item.id}', ${index})"/>${metaBadge} ${originalBtn}`;
             } else {
-                const posterAttr = img.src ? `poster="${img.src}"` : (img.pendingAttr ? `poster="" ${img.pendingAttr}` : ''); 
+                const posterAttr = img.pendingAttr ? `poster="" ${img.pendingAttr}` : ''; 
                 const videoId = `video-${item.id}-${index}`;
                 html += `<video id="${videoId}" ${posterAttr} controls preload="none" class="${imgClasses} bg-black"></video>${metaBadge} ${originalBtn}`;
                 
@@ -1938,7 +1953,6 @@ function createCardElement(item, isSearching) {
     let updateInfo = '';
     if (item.updatedAt) {
         const upDate = new Date(item.updatedAt).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        // ml-3 (余白) を追加し、span を独立配置
         updateInfo = `<span class="text-[10px] text-slate-400 font-normal ml-3 tracking-normal inline-block" title="最終更新"><i class="fa-solid fa-clock-rotate-left mr-1"></i>${upDate}</span>`;
     }
     
@@ -1993,6 +2007,7 @@ function createCardElement(item, isSearching) {
     `;
     return card;
 }
+
 function checkIsSearching() {
     return (
         document.getElementById('search-input').value.trim() !== '' || 
@@ -2022,7 +2037,6 @@ function filterDiaryItems(resetLimit = true) {
         const quickInput = document.getElementById('search-input').value.trim(); 
         const quickQueries = quickInput ? quickInput.split(/[\s ,]+/).map(s => fuzzyString(s)).filter(s => s) : [];
         const tagFilter = document.getElementById('tag-filter').value; 
-        // 絞り込み用のサイドバーや検索パネルにある「filter-weather」を明確に指定して取得します
         const weatherActiveRadio = document.querySelector('input[name="filter-weather"]:checked');
         const weatherFilter = weatherActiveRadio ? weatherActiveRadio.value : ""; 
         const sortOrder = document.getElementById('modal-sort-select').value;
@@ -2447,9 +2461,8 @@ function renderAlbum() {
 
             let mediaHtml = '';
             if (images.length === 1) {
-                // 画像が1枚のときは、存在しない2枚目・3枚目の処理をスキップして1枚だけを安全に表示します
                 mediaHtml = `<div class="relative w-full h-full flex items-center justify-center p-3 overflow-hidden">`;
-                mediaHtml += `<img src="${images[0].src}" ${images[0].pendingAttr} class="relative w-[92%] h-[92%] object-contain bg-slate-100 dark:bg-slate-900 rounded-xl shadow-md transition-transform duration-300 group-hover:scale-[1.02] z-10" />`;
+                mediaHtml += `<img src="" ${images[0].pendingAttr} class="relative w-[92%] h-[92%] object-contain bg-slate-100 dark:bg-slate-900 rounded-xl shadow-md transition-transform duration-300 group-hover:scale-[1.02] z-10" />`;
                 mediaHtml += `</div>`;
             } else {
                 const gridCount = Math.min(images.length, 4);
@@ -2460,13 +2473,13 @@ function renderAlbum() {
                     if (i === 3 && images.length > 4) {
                         mediaHtml += `
                             <div class="relative w-full h-full rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
-                                <img src="${images[i].src}" ${images[i].pendingAttr} class="w-full h-full object-contain" />
+                                <img src="" ${images[i].pendingAttr} class="w-full h-full object-contain" />
                                 <div class="absolute inset-0 bg-black/50 flex items-center justify-center text-white text-xs font-bold">+${images.length - 3}</div>
                             </div>`;
                     } else {
                         mediaHtml += `
                             <div class="relative w-full h-full rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
-                                <img src="${images[i].src}" ${images[i].pendingAttr} class="w-full h-full object-contain" />
+                                <img src="" ${images[i].pendingAttr} class="w-full h-full object-contain" />
                             </div>`;
                     }
                 }
@@ -2508,7 +2521,6 @@ function renderAlbum() {
         });
         
         setTimeout(applyMediaUrls, 10);
-        
     } catch(e) {}
 }
 
@@ -2541,7 +2553,7 @@ function openImageGallery(itemId, event) {
         
         imgsHtml += `
             <div class="relative flex-shrink-0 w-72 sm:w-96 aspect-square bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-white/10 group snap-center">
-                <img src="${img.src}" ${img.pendingAttr} class="w-full h-full object-contain cursor-zoom-in" onclick="openLightboxFromCard('${item.id}', ${index})" />
+                <img src="" ${img.pendingAttr} class="w-full h-full object-contain cursor-zoom-in" onclick="openLightboxFromCard('${item.id}', ${index})" />
                 ${videoOverlay}
                 <div class="absolute top-4 right-4 bg-black/40 backdrop-blur-sm p-2 rounded-xl flex items-center gap-2">
                     <input type="checkbox" value="${img.id}" class="image-checkbox export-checkbox" ${globalSelectedImageIds.has(img.id) ? 'checked' : ''} onchange="syncImageCheckbox(this)" style="position:static;" />
@@ -2909,7 +2921,6 @@ async function openLightboxFromCard(id, mediaIndex = 0) {
     
     activeLightboxGallery = mediaFiles.map(m => ({
         type: m.type?.startsWith('video/') ? 'video' : 'image',
-        data: m.data || m.thumbnail || '',
         mediaName: m.mediaName,
         originalName: m.originalName,
         metadata: m.metadata,
@@ -2920,7 +2931,7 @@ async function openLightboxFromCard(id, mediaIndex = 0) {
     const targetMedia = activeLightboxGallery[activeLightboxIndex];
     if (!targetMedia) return;
     
-    let srcUrl = targetMedia.data;
+    let srcUrl = '';
     if (targetMedia.mediaName) srcUrl = await loadMediaUrl(targetMedia.mediaName);
 
     if (targetMedia.type === 'image') { 
@@ -2951,7 +2962,7 @@ async function navigateLightbox(direction, event) {
     if (activeLightboxIndex >= activeLightboxGallery.length) activeLightboxIndex = 0;
     
     const targetMedia = activeLightboxGallery[activeLightboxIndex];
-    let srcUrl = targetMedia.data;
+    let srcUrl = '';
     if (targetMedia.mediaName) srcUrl = await loadMediaUrl(targetMedia.mediaName);
     
     if (targetMedia.type === 'image') { 
@@ -3055,6 +3066,7 @@ function toggleSettings() {
         setTimeout(() => modal.classList.add('hidden'), 300); 
     }
 }
+
 function getTargetsForExport() { 
     const targets = []; 
     const hasDiaryCheck = globalSelectedIds.size > 0;
@@ -3092,7 +3104,8 @@ function exportData(type) {
     if (targets.length === 0) return alert("出力するデータがありません。");
     const dateStr = new Date().toISOString().split('T')[0];
     
-    const content = type === 'json' ? JSON.stringify(targets, null, 2) : targets.map(i => {
+    const cleanedTargets = targets.map(cleanItemForStorage);
+    const content = type === 'json' ? JSON.stringify(cleanedTargets, null, 2) : cleanedTargets.map(i => {
         const displayDate = i.date ? i.date.replace('T', ' ') : (i.date || '');
         let md = `## ${displayDate}\n\n`;
         
@@ -3107,7 +3120,7 @@ function exportData(type) {
         
         const images = getAllImagesFromItem(i);
         images.forEach(img => {
-            const fileRelPath = img.isOriginal ? `originals/${img.originalName}` : (img.mediaName ? `media/${img.mediaName}` : img.src);
+            const fileRelPath = img.isOriginal ? `originals/${img.originalName}` : (img.mediaName ? `media/${img.mediaName}` : '');
 
             if (img.isVideo) {
                 md += `[動画ファイル](${fileRelPath})\n\n`;
@@ -3126,7 +3139,6 @@ function exportData(type) {
         return md;
     }).join('---\n\n');
     
-    // Markdownの文字化け対策：先頭にBOM（目印）を追加
     const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
     const blobData = type === 'json' ? [content] : [bom, content];
     const blob = new Blob(blobData, { type: type === 'json' ? 'application/json' : 'text/markdown' }); 
@@ -3152,35 +3164,30 @@ async function exportPDF() {
 
     showToast("印刷データを構築中...");
 
-    // 1. メモリ上に「一時コンテナ」を作成
     const tempContainer = document.createElement('div');
     
-    targets.forEach(item => { 
+    for (const item of targets) {
         const isDiaryChecked = hasDiaryCheck ? globalSelectedIds.has(item.id) : false;
         const hasSpecificImages = hasImageCheck && item.mediaFiles && item.mediaFiles.length > 0;
         
         let printItem = { ...item };
         
-        // 日付データに含まれる「T」を半角スペースに置換
         if (printItem.date && typeof printItem.date === 'string') {
             printItem.date = printItem.date.replace('T', ' ');
         }
         if (printItem.updatedAt && typeof printItem.updatedAt === 'string') {
-            printItem.updatedAt = printItem.updatedAt.replace('T', ' ');
+            printItem.updatedAt = ' ' + printItem.updatedAt.replace('T', ' ');
         }
         
-        // 画像のみ選択時は本文・タグ・更新日時のみクリア（weatherは保持）
         if ((hasDiaryCheck || hasImageCheck) && !isDiaryChecked && hasSpecificImages) {
             printItem.content = "";
             printItem.tags = [];
             printItem.updatedAt = null;
         }
         
-        // メモリ上のコンテナに要素を追加
         tempContainer.appendChild(createCardElement(printItem, true)); 
-    });
+    }
 
-    // 2. 非同期で画像（Base64）を適用
     const mediaElements = tempContainer.querySelectorAll('[data-pending-media]');
     for (const el of mediaElements) {
         const mediaName = el.getAttribute('data-pending-media');
@@ -3194,31 +3201,34 @@ async function exportPDF() {
         }
     }
 
-    // 3. 画面外に「見えない別のHTML（Iframe）」を作成
     const iframe = document.createElement('iframe');
-    iframe.style.position = 'absolute';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
     iframe.style.width = '0px';
     iframe.style.height = '0px';
     iframe.style.border = 'none';
-    iframe.style.visibility = 'hidden';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
     document.body.appendChild(iframe);
 
-    // 印刷用の裏画面に、親画面のCSS（アイコンフォント等）を丸ごと引き継ぐ
     const styleLinks = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
         .map(link => link.outerHTML).join('\n');
 
-    // 4. 新しいHTMLの中に、印刷専用のスタイルとデータを書き込む
     const frameDoc = iframe.contentWindow.document;
     frameDoc.open();
     frameDoc.write(`
         <!DOCTYPE html>
-        <html>
+        <html lang="ja">
         <head>
             <meta charset="UTF-8">
             <title>SmartDiary Print</title>
             ${styleLinks}
             <style>
-                /* 全体リセット：崩れを徹底防止 */
+                @page {
+                    size: A4 portrait;
+                    margin: 15mm 12mm;
+                }
                 * { 
                     box-sizing: border-box !important; 
                     -webkit-print-color-adjust: exact !important; 
@@ -3226,77 +3236,50 @@ async function exportPDF() {
                 }
                 body {
                     font-family: system-ui, -apple-system, sans-serif; 
-                    padding: 20px; 
+                    padding: 0; 
                     color: #1e293b !important; 
                     background: white !important; 
                     margin: 0; 
                     line-height: 1.6;
                 }
-                
-                /* 日記カード全体の囲い枠（ページをまたぐ途中で割れないように設定） */
                 .diary-card { 
                     border: 1px solid #e2e8f0 !important; 
                     border-radius: 12px !important; 
-                    padding: 20px !important; 
-                    margin-bottom: 24px !important; 
+                    padding: 16px !important; 
+                    margin-bottom: 20px !important; 
                     page-break-inside: avoid !important; 
                     break-inside: avoid !important;
                     background: white !important;
                     display: block !important;
                     position: relative !important;
                 }
-                
-                /* 日付・天気ヘッダー領域の配置（絶対に改行させない強力な指定） */
                 .diary-card > div:first-child {
                     border-bottom: 1px solid #f1f5f9 !important;
                     padding-bottom: 8px !important;
-                    margin-bottom: 12px !important;
-                }
-                
-                .diary-card > div:first-child,
-                .diary-card > div:first-child > div,
-                .diary-card > div:first-child > div > div {
+                    margin-bottom: 10px !important;
                     display: flex !important;
                     flex-direction: row !important;
                     flex-wrap: nowrap !important;
                     align-items: center !important;
-                    justify-content: flex-start !important;
+                    justify-content: space-between !important;
+                }
+                .diary-card > div:first-child > div {
+                    display: flex !important;
+                    flex-direction: row !important;
+                    flex-wrap: nowrap !important;
+                    align-items: center !important;
+                    gap: 16px !important;
                     white-space: nowrap !important;
                 }
-
-                /* 幅不足による押し出し改行を防ぐため、中身のサイズを確保 */
-                .diary-card > div:first-child > div > div {
-                    min-width: max-content !important;
-                    width: max-content !important;
-                    gap: 8px !important;
-                }
-
-                /* 天気アイコンのコンテナ */
-                .diary-card > div:first-child .flex-shrink-0 {
-                    display: inline-flex !important;
-                    align-items: center !important;
-                }
-
-                /* 万が一テキスト形式の日付が連続してくっつく場合の隙間を確保 */
-                .diary-card span + span,
-                .diary-card time + time,
-                .diary-card time + span,
-                .diary-card span + time {
-                    margin-left: 8px !important;
-                }
-
-                /* 本文テキストエリア */
-                .prose { 
-                    font-size: 14px !important; 
-                    line-height: 1.8 !important; 
+                .prose {
+                    font-size: 13px !important; 
+                    line-height: 1.7 !important; 
                     color: #1e293b !important;
-                    margin-top: 12px !important; 
-                    margin-bottom: 12px !important;
+                    margin-top: 10px !important; 
+                    margin-bottom: 10px !important;
                     display: block !important;
                     white-space: pre-wrap !important;
                 }
-                
-                /* タグリストの横並び調整 */
                 .flex.flex-wrap {
                     display: flex !important;
                     flex-wrap: wrap !important;
@@ -3308,18 +3291,14 @@ async function exportPDF() {
                     color: #475569 !important;
                     padding: 2px 8px !important;
                     border-radius: 4px !important;
-                    font-size: 11px !important;
+                    font-size: 10px !important;
                 }
-
-                /* 画像エリア（画像だけ出力する場合もここが独立） */
                 .grid { 
                     display: flex !important; 
                     flex-wrap: wrap !important; 
-                    gap: 12px !important; 
-                    margin-top: 12px !important;
+                    gap: 10px !important; 
+                    margin-top: 10px !important;
                 }
-                
-                /* 画像コンテナ：横に余計な文字が漏れないように隠蔽・独立化 */
                 .silver-ratio-container, .media-item-container { 
                     display: flex !important; 
                     align-items: center !important; 
@@ -3328,56 +3307,36 @@ async function exportPDF() {
                     border: 1px solid #e2e8f0 !important;
                     border-radius: 8px !important; 
                     overflow: hidden !important;
-                    width: 48% !important; /* 2段組で綺麗に並ぶように調整 */
-                    min-width: 240px !important;
+                    width: 48% !important;
+                    min-width: 220px !important;
                     aspect-ratio: 1.414 / 1 !important;
                     position: relative !important;
                 }
-                
                 .silver-ratio-container img, .media-item-container img { 
                     object-fit: contain !important; 
                     width: 100% !important; 
                     height: 100% !important; 
+                    display: block !important;
                 }
-
-                /* 画像だけの出力時などに発生する「余計な文字・ボタン・チェックボックス」を完全削除 */
-                .export-checkbox-container, 
+                .silver-ratio-container:only-child, .media-item-container:only-child {
+                    width: 100% !important;
+                    max-height: 400px !important;
+                    aspect-ratio: auto !important;
+                }
+                .export-checkbox-container,
                 .export-checkbox, 
                 button, 
                 .no-print,
+                .sort-buttons-container,
                 input[type="checkbox"] { 
                     display: none !important; 
-                    width: 0 !important; 
-                    height: 0 !important; 
-                    opacity: 0 !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
                 }
-                
-                /* ソートボタン・アクションボタン類のみ非表示 */
-                .sort-buttons-container {
-                    display: none !important;
-                }
-
-                /* 天気アイコン用のフォントを印刷時も強制的に表示し、色を正確に出力 */
                 .flex-shrink-0 i.fa-solid,
                 .flex-shrink-0 i,
                 i[class*="fa-"] {
                     display: inline-block !important;
                     visibility: visible !important;
-                    -webkit-print-color-adjust: exact !important;
-                    print-color-adjust: exact !important;
                 }
-
-                /* テキストのカラーを強制統一 */
-                h1, h2, h3, h4, p {
-                    color: #1e293b !important;
-                }
-                .text-slate-400, .text-slate-500 { 
-                    color: #64748b !important; 
-                }
-                
-                /* 天気アイコンの色を明示的に指定して確実に反映させる */
                 .text-amber-500 { color: #f59e0b !important; }
                 .text-blue-400 { color: #60a5fa !important; }
                 .text-indigo-400 { color: #818cf8 !important; }
@@ -3390,23 +3349,34 @@ async function exportPDF() {
     `);
     frameDoc.close();
 
-    // 5. データ適用完了を待って印刷画面を起動
-    setTimeout(() => {
+    const checkImagesLoaded = async () => {
+        const imgs = Array.from(frameDoc.querySelectorAll('img'));
+        const promises = imgs.map(img => {
+            if (img.complete && img.naturalHeight !== 0) return Promise.resolve();
+            return new Promise(resolve => {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+            });
+        });
+        await Promise.all(promises);
+    };
+
+    setTimeout(async () => {
         try {
+            await checkImagesLoaded();
             iframe.contentWindow.focus();
             iframe.contentWindow.print();
         } catch (e) {
-            console.error(e);
+            console.error("PDF印刷実行エラー:", e);
             showToast("印刷に失敗しました");
         } finally {
-            // 印刷後は不要なIframeを削除
             setTimeout(() => {
                 if (iframe.parentNode) {
                     iframe.parentNode.removeChild(iframe);
                 }
             }, 1000);
         }
-    }, 800);
+    }, 500);
 }
 
 async function exportOriginalMedia() {
@@ -3492,8 +3462,6 @@ const SmartPrintAdapter = {
                             imageNames.push(`originals/${img.originalName}`); 
                         } else if (img.mediaName) {
                             imageNames.push(`media/${img.mediaName}`);
-                        } else if (img.src && !img.isVideo) {
-                            imageNames.push(img.src);
                         }
                     });
                     
@@ -3549,22 +3517,23 @@ async function importData(event) {
             let exactMatchCount = 0;
 
             importedItems.forEach(incoming => {
+                const cleanedIncoming = cleanItemForStorage(incoming);
                 const exactMatch = diaryItems.find(existing =>
-                    existing.date === incoming.date && 
-                    existing.content === incoming.content && 
-                    existing.weather === incoming.weather &&
-                    existing.updatedAt === incoming.updatedAt
+                    existing.date === cleanedIncoming.date && 
+                    existing.content === cleanedIncoming.content && 
+                    existing.weather === cleanedIncoming.weather &&
+                    existing.updatedAt === cleanedIncoming.updatedAt
                 );
                 if (exactMatch) {
                     exactMatchCount++;
                     return;
                 }
 
-                const conflictingExisting = diaryItems.filter(existing => existing.date === incoming.date);
+                const conflictingExisting = diaryItems.filter(existing => existing.date === cleanedIncoming.date);
                 if (conflictingExisting.length > 0) {
-                    pendingImportConflicts.push({ incoming: incoming, existing: conflictingExisting });
+                    pendingImportConflicts.push({ incoming: cleanedIncoming, existing: conflictingExisting });
                 } else {
-                    pendingImportSafeItems.push(incoming);
+                    pendingImportSafeItems.push(cleanedIncoming);
                 }
             });
 
