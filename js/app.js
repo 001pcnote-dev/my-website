@@ -2796,7 +2796,12 @@ function openModal(id = null) {
         if (item) {
             document.getElementById('entry-id').value = item.id;
             let entryDate = item.date || '';
-            if (entryDate && !entryDate.includes('T')) { entryDate = `${entryDate}T00:00`; }
+            if (entryDate) {
+                const d = getSafeDate(entryDate);
+                if (!isNaN(d.getTime())) {
+                    entryDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                }
+            }
             document.getElementById('entry-date').value = entryDate;
             
             contentTextarea.value = item.content || '';
