@@ -2001,7 +2001,7 @@ function createCardElement(item, isSearching) {
                 </div>
             </div>
         </div>
-        <div class="prose prose-slate prose-sm max-w-none text-slate-600 dark:text-slate-300 font-normal leading-relaxed break-words">${DOMPurify.sanitize(marked.parse(item.content || ''))}</div>
+        <div class="prose prose-slate prose-sm max-w-none text-slate-600 dark:text-slate-300 font-normal leading-relaxed break-words">${DOMPurify.sanitize(marked.parse(item.content || ''), { ADD_TAGS: ['input'], ADD_ATTR: ['type', 'checked', 'disabled'] }).replace(/<li>(\s*<input[^>]*type="checkbox"[^>]*>)/gi, '<li class="list-none -ml-5 flex items-start gap-2 [&::before]:hidden [&>input]:mt-1.5">$1')}</div>
         ${mediaHtml}
         ${tagsHtml}
     `;
